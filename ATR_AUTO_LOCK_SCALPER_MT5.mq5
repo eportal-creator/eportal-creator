@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.3)                       |
+//|                    PROJECT ATR  (MT5 v2.4)                       |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -15,9 +15,12 @@
 //| 10. IsNewBar()      — entry checked once per bar, not every tick |
 //| 11. SGT auto-detect — TimeGMT()+8h, no manual offset needed     |
 //| 12. ADX auto-detect — H1 ADX decides Momentum vs Reversal mode  |
+//| 13. DI direction    — Momentum BUY only when +DI>-DI, SELL only |
+//|                        when -DI>+DI (prevents buying downtrend)  |
+//| 14. ADX=0 guard     — skip entry if ADX data not loaded yet     |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.30"
+#property version   "2.40"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -100,7 +103,9 @@ datetime LastBarTime = 0;
 
 // ── Tick-level cache (set once at top of OnTick) ───────────────────
 double g_ATR        = 0.0;    // avoids 3× CopyBuffer per tick
-double g_ADX        = 0.0;    // cached H1 ADX value
+double g_ADX        = 0.0;    // cached H1 ADX main line
+double g_PlusDI     = 0.0;    // cached H1 +DI (bullish pressure)
+double g_MinusDI    = 0.0;    // cached H1 -DI (bearish pressure)
 bool   g_IsTrending = false;  // true = ADX >= ADX_Trend_Level
 bool   g_IsNewBar   = false;  // avoids duplicate IsNewBar() calls
 
@@ -132,7 +137,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.3 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.4 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -206,14 +211,15 @@ double GetATR()
    return buf[0];
 }
 
-// ADX main line from last COMPLETED bar on ADX_TimeFrame (shift 1)
-// Buffer 0 = main ADX line, Buffer 1 = +DI, Buffer 2 = -DI
-double GetADX()
+// Refresh ADX + DI lines from last COMPLETED bar on ADX_TimeFrame (shift 1)
+// Buffer 0 = ADX main, Buffer 1 = +DI, Buffer 2 = -DI
+// Sets g_ADX, g_PlusDI, g_MinusDI
+void RefreshADX()
 {
-   double buf[];
-   ArraySetAsSeries(buf, true);
-   if(CopyBuffer(ADX_Handle, 0, 1, 1, buf) < 1) return 0.0;
-   return buf[0];
+   double buf[];   ArraySetAsSeries(buf, true);
+   g_ADX     = (CopyBuffer(ADX_Handle, 0, 1, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_PlusDI  = (CopyBuffer(ADX_Handle, 1, 1, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_MinusDI = (CopyBuffer(ADX_Handle, 2, 1, 1, buf) >= 1) ? buf[0] : 0.0;
 }
 
 int CountMyPositions()
@@ -273,6 +279,8 @@ void TryOpenTrade()
    if(!g_IsNewBar) return;
    if(EnableSessionFilter && !InSession()) return;
    if(g_ATR <= 0.0 || g_ATR < ATR_Min_Filter) return;
+   // If AutoModeDetect is on, ADX must be loaded — never default to REVERSAL silently
+   if(AutoModeDetect && g_ADX <= 0.0) return;
    if((long)(TimeCurrent() - LastEntry) < (long)(CooldownMinutes * 60)) return;
    if(CountMyPositions() > 0) return;
 
@@ -299,10 +307,13 @@ void TryOpenTrade()
 
    if(useMomentum)
    {
-      // MOMENTUM: trade in the direction of the completed candle
-      if     (c > o) { dir = ORDER_TYPE_BUY;  price = ask; }
-      else if(c < o) { dir = ORDER_TYPE_SELL; price = bid; }
-      else           return;
+      // MOMENTUM: trade candle direction AND H1 DI must agree
+      // +DI > -DI = H1 bullish bias  → only BUY  bullish candle
+      // -DI > +DI = H1 bearish bias  → only SELL bearish candle
+      // Prevents buying a bounce inside a strong downtrend
+      if     (c > o && g_PlusDI  > g_MinusDI) { dir = ORDER_TYPE_BUY;  price = ask; }
+      else if(c < o && g_MinusDI > g_PlusDI)  { dir = ORDER_TYPE_SELL; price = bid; }
+      else return;  // candle and H1 DI direction disagree — skip
    }
    else
    {
@@ -337,7 +348,9 @@ void TryOpenTrade()
       LastEntry = TimeCurrent();
       Print("OPEN ", (dir == ORDER_TYPE_BUY ? "BUY " : "SELL"),
             " | Mode=",    (useMomentum ? "MOMENTUM" : "REVERSAL"),
-            " | ADX=",     DoubleToString(g_ADX,  1),
+            " | ADX=",     DoubleToString(g_ADX,     1),
+            " | +DI=",     DoubleToString(g_PlusDI,  1),
+            " | -DI=",     DoubleToString(g_MinusDI, 1),
             " | ATR=",     DoubleToString(g_ATR,  2),
             " | Range=",   DoubleToString(h - l,  2),
             " | SL±",      DoubleToString(slDist, 2),
@@ -429,22 +442,25 @@ void DrawInfoPanel()
    if(!AutoModeDetect)
       adxStr = "DISABLED (manual mode)";
    else
-      adxStr = DoubleToString(g_ADX, 1)
+      adxStr = (g_ADX > 0.0 ? DoubleToString(g_ADX, 1) : "LOADING...")
              + "  [" + EnumToString(ADX_TimeFrame) + "]"
              + "  thr=" + DoubleToString(ADX_Trend_Level, 0)
-             + "  → " + (g_IsTrending ? "TREND" : "RANGE");
+             + "  → " + (g_ADX <= 0.0 ? "NO DATA" : (g_IsTrending ? "TREND" : "RANGE"));
 
    string atrOk  = (g_ATR >= ATR_Min_Filter) ? "[OK]" : "[LOW - no trade]";
    string sessStr = !EnableSessionFilter ? "DISABLED"
                   : (InSession() ? "OPEN  [OK]" : "CLOSED [waiting]");
 
    string info =
-      "╔══ PROJECT ATR  v2.3  (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.4  (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
                        + "  [" + modeSource + "]"                           + "\n"
       "  ADX(" + IntegerToString(ADX_Period) + ")  : " + adxStr             + "\n"
+      "  +DI / -DI : " + DoubleToString(g_PlusDI, 1)
+                       + " / " + DoubleToString(g_MinusDI, 1)
+                       + (g_PlusDI > g_MinusDI ? "  [BULL]" : "  [BEAR]") + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
@@ -479,7 +495,7 @@ void DrawInfoPanel()
 void OnTick()
 {
    g_ATR        = GetATR();
-   g_ADX        = GetADX();
+   RefreshADX();                                // fills g_ADX, g_PlusDI, g_MinusDI
    g_IsTrending = (g_ADX >= ADX_Trend_Level);  // true = trend → Momentum
    g_IsNewBar   = IsNewBar();
 
