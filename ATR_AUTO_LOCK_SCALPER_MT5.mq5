@@ -354,10 +354,15 @@ void TryOpenTrade()
 //===================================================================
 void ManageTrades()
 {
-   if(g_ATR <= 0.0) return;
+   // ATR only needed for trailing stop — pre-compute distances if valid
+   // Expiry close runs ALWAYS regardless of ATR availability
+   bool   trailOk = (g_ATR > 0.0);
+   double tsStart = trailOk ? g_ATR * TSstart_ATR_Factor : 0.0;
+   double tsStep  = trailOk ? g_ATR * TSstep_ATR_Factor  : 0.0;
 
-   double tsStart = g_ATR * TSstart_ATR_Factor;
-   double tsStep  = g_ATR * TSstep_ATR_Factor;
+   // Fetch price once outside loop — does not change per-position
+   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -372,10 +377,7 @@ void ManageTrades()
       double             tp     = PositionGetDouble(POSITION_TP);
       datetime           opened = (datetime)PositionGetInteger(POSITION_TIME);
 
-      double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-      double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-
-      // ── Expiry ─────────────────────────────────────────────────
+      // ── Expiry — always runs, independent of ATR ───────────────
       if((long)(TimeCurrent() - opened) > (long)(ExpireHours * 3600))
       {
          if(trade.PositionClose(ticket))
@@ -386,7 +388,9 @@ void ManageTrades()
          continue;
       }
 
-      // ── Trailing stop ──────────────────────────────────────────
+      // ── Trailing stop — only when ATR is valid ─────────────────
+      if(!trailOk) continue;
+
       double profit = (ptype == POSITION_TYPE_BUY) ? (bid - op) : (op - ask);
 
       if(profit >= tsStart)
@@ -442,7 +446,7 @@ void DrawInfoPanel()
                        + "  [" + modeSource + "]"                           + "\n"
       "  ADX(" + IntegerToString(ADX_Period) + ")  : " + adxStr             + "\n"
       "────────────────────────────────────────\n"
-      "  ATR(14)   : " + DoubleToString(g_ATR, 2)
+      "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
                        + "  " + atrOk                                        + "\n"
       "  Candle≥   : " + DoubleToString(g_ATR * CandleATR_Factor, 2)         + "\n"
