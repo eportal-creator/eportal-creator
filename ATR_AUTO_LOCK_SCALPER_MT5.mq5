@@ -145,7 +145,7 @@ datetime StartOfDay(datetime t)
 // Broker time → Singapore time (UTC+8)
 datetime ToSGT(datetime brokerTime)
 {
-   return brokerTime - (long)BrokerGMT_Offset * 3600 + 8 * 3600;
+   return (datetime)((long)brokerTime - (long)BrokerGMT_Offset * 3600 + 8 * 3600);
 }
 
 bool InSession()
@@ -166,7 +166,7 @@ ENUM_ORDER_TYPE_FILLING GetFillType()
 // ATR from last COMPLETED bar (shift 1) — avoids mid-bar noise
 double GetATR()
 {
-   double buf[1];
+   double buf[];
    ArraySetAsSeries(buf, true);
    if(CopyBuffer(ATR_Handle, 0, 1, 1, buf) < 1) return 0.0;
    return buf[0];
