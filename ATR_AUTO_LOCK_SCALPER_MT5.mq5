@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|              ATR_AUTO_LOCK_SCALPER EA  (MT5 v2.0)               |
+//|              ATR_AUTO_LOCK_SCALPER EA  (MT5 v2.1)               |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -13,10 +13,11 @@
 //|  8. CooldownMinutes — increased 3 → 5                           |
 //|  9. CandleATR_Factor— default 200 → 1.5 (sensible multiplier)  |
 //| 10. IsNewBar()      — entry checked once per bar, not every tick |
+//| 11. SGT auto-detect — TimeGMT()+8h, no manual offset needed     |
 //+------------------------------------------------------------------+
 #property copyright "ATR Auto Scalper"
-#property version   "2.00"
-#property description "ATR-based M1 scalper | Auto SL/TP/Trailing | Session filter | XAUUSD"
+#property version   "2.10"
+#property description "ATR-based M1 scalper | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
 
@@ -29,45 +30,46 @@ CTrade trade;
 input group "=== Trade ==="
 input double LotSize             = 0.01;   // Lot size
 input int    MagicNumber         = 5555;   // EA identifier
-input double ExpireHours         = 0.5;    // Force-close after N hours (was 2.0 → large losses)
+input double ExpireHours         = 0.5;    // Force-close after N hours
 input int    CooldownMinutes     = 5;      // Min gap between entries (minutes)
 
 input group "=== ATR Settings ==="
 input int    ATR_Period          = 14;     // ATR period (M1 bars)
 input double ATR_Min_Filter      = 1.0;
 // Minimum ATR in PRICE to allow trading.
-// XAUUSD M1 typical ATR: 2.0–3.5. Set to 1.5 to skip low-vol periods.
+// XAUUSD M1 typical ATR: 2.0–3.5. Set 1.5 to skip low-vol periods.
 
 input double CandleATR_Factor    = 1.5;
 // Candle range (high-low) must be >= N × ATR.
-// Filters small indecision candles. 1.0–2.0 recommended.
+// Filters small/indecision candles. 1.0–2.0 recommended.
 
 input double SL_ATR_Factor       = 1.5;
-// Stop loss = N × ATR from entry price (in dollars for XAUUSD).
-// 1.5 × 2.5 ATR = $3.75 SL on 0.01 lot.
+// Stop loss = N × ATR from entry price (dollars for XAUUSD).
+// e.g. 1.5 × $2.50 ATR = $3.75 SL per 0.01 lot.
 
 input double TP_ATR_Factor       = 0.0;
-// Take profit = N × ATR (0 = disabled → rely on trailing stop).
-// Suggested: 2.0–3.0 for fixed TP, or leave 0 for trailing only.
+// Take profit = N × ATR (0 = disabled → trailing stop only).
+// Suggested: 2.0–3.0 for fixed TP.
 
 input double TSstart_ATR_Factor  = 0.8;
-// Start trailing after N × ATR profit in price.
-// 0.8 × 2.5 = $2.0 profit before trailing activates.
+// Begin trailing after N × ATR profit.
+// e.g. 0.8 × $2.50 = $2.00 profit before trailing activates.
 
 input double TSstep_ATR_Factor   = 0.4;
-// Trail the SL by N × ATR from current price.
-// 0.4 × 2.5 = $1.0 trail step.
+// Trail SL N × ATR behind current price.
+// e.g. 0.4 × $2.50 = $1.00 trail step.
 
 input group "=== Entry Mode ==="
 input bool   MomentumMode        = false;
-// false = REVERSAL  → BUY on red candle / SELL on green candle
-// true  = MOMENTUM  → BUY on green candle / SELL on red candle
+// false = REVERSAL  → BUY red candle  / SELL green candle
+// true  = MOMENTUM  → BUY green candle / SELL red candle
 
-input group "=== Session Filter (Singapore Time, UTC+8) ==="
+input group "=== Session Filter (Singapore Time — auto-detected) ==="
 input bool   EnableSessionFilter = true;
-input int    BrokerGMT_Offset    = 0;     // Broker server UTC offset in hours
 input int    SG_Start            = 7;     // Session open  (SGT hour, 24h)
 input int    SG_End              = 17;    // Session close (SGT hour, 24h)
+// SGT = UTC+8. Broker GMT offset is auto-detected via TimeGMT().
+// No manual offset entry needed — works on any broker.
 
 //===================================================================
 //  GLOBALS
@@ -97,11 +99,15 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("ATR Auto Scalper MT5 v2.0 | Symbol=", Symbol(),
-         " | Mode=", (MomentumMode ? "MOMENTUM" : "REVERSAL"),
-         " | Magic=", MagicNumber,
-         " | SL=", SL_ATR_Factor, "xATR",
-         " | TS@", TSstart_ATR_Factor, "xATR");
+   // Show auto-detected broker GMT offset in log for verification
+   int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
+
+   Print("ATR Auto Scalper MT5 v2.1 | Symbol=", Symbol(),
+         " | Mode=",   (MomentumMode ? "MOMENTUM" : "REVERSAL"),
+         " | Magic=",  MagicNumber,
+         " | SL=",     SL_ATR_Factor, "xATR",
+         " | TS@",     TSstart_ATR_Factor, "xATR",
+         " | BrokerGMT=UTC+", detectedOffset, " (auto)");
 
    return INIT_SUCCEEDED;
 }
@@ -114,7 +120,7 @@ void OnDeinit(const int reason)
 }
 
 //===================================================================
-//  SMALL HELPERS
+//  HELPERS
 //===================================================================
 
 // Return day-of-month from a datetime
@@ -142,19 +148,27 @@ datetime StartOfDay(datetime t)
    return StructToTime(s);
 }
 
-// Broker time → Singapore time (UTC+8)
-datetime ToSGT(datetime brokerTime)
+// ── SGT auto-detection ─────────────────────────────────────────────
+// TimeGMT() returns true UTC from the MT5 terminal — no manual broker
+// offset needed. SGT = UTC+8, so we simply add 8 hours to UTC.
+datetime GetSGT()
 {
-   return (datetime)((long)brokerTime - (long)BrokerGMT_Offset * 3600 + 8 * 3600);
+   return (datetime)((long)TimeGMT() + 8 * 3600);
 }
 
 bool InSession()
 {
-   int h = HourOfTime(ToSGT(TimeCurrent()));
+   int h = HourOfTime(GetSGT());
    return (h >= SG_Start && h < SG_End);
 }
 
-// Detect the correct order fill type for this symbol/broker
+// Auto-detect broker GMT offset (for display only)
+int BrokerGMTOffset()
+{
+   return (int)((TimeCurrent() - TimeGMT()) / 3600);
+}
+
+// Detect correct order fill type for this symbol/broker
 ENUM_ORDER_TYPE_FILLING GetFillType()
 {
    long mode = (long)SymbolInfoInteger(Symbol(), SYMBOL_FILLING_MODE);
@@ -180,14 +194,14 @@ int CountMyPositions()
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
-      if(PositionGetString(POSITION_SYMBOL)  == Symbol() &&
+      if(PositionGetString(POSITION_SYMBOL)      == Symbol() &&
          (int)PositionGetInteger(POSITION_MAGIC) == MagicNumber)
          count++;
    }
    return count;
 }
 
-// Returns true once per new M1 bar (prevents multiple entry attempts per bar)
+// Returns true once per new M1 bar — prevents multiple entries per bar
 bool IsNewBar()
 {
    datetime t = iTime(Symbol(), PERIOD_M1, 0);
@@ -219,7 +233,7 @@ void UpdateTodayProfit()
    {
       ulong ticket = HistoryDealGetTicket(i);
       if(ticket == 0) continue;
-      if((int)HistoryDealGetInteger(ticket, DEAL_MAGIC)  != MagicNumber) continue;
+      if((int)HistoryDealGetInteger(ticket, DEAL_MAGIC) != MagicNumber) continue;
       if(HistoryDealGetString(ticket, DEAL_SYMBOL) != Symbol()) continue;
 
       long entry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
@@ -235,7 +249,7 @@ void UpdateTodayProfit()
 //===================================================================
 void TryOpenTrade()
 {
-   // Entry is evaluated once per new M1 bar only
+   // Entry evaluated once per new M1 bar only
    if(!IsNewBar()) return;
 
    if(EnableSessionFilter && !InSession()) return;
@@ -247,14 +261,14 @@ void TryOpenTrade()
    if(CountMyPositions() > 0) return;
 
    // ── Signal from bar 1 (last COMPLETED candle) ──────────────────
-   // Using bar 0 causes the signal to flip every tick mid-candle.
+   // Bar 0 flips every tick mid-candle — bar 1 is stable.
    double o = iOpen(Symbol(),  PERIOD_M1, 1);
    double h = iHigh(Symbol(),  PERIOD_M1, 1);
    double l = iLow(Symbol(),   PERIOD_M1, 1);
    double c = iClose(Symbol(), PERIOD_M1, 1);
 
-   // Candle range filter — price vs price, no Point conversion needed
-   double range    = h - l;
+   // Candle range filter — price vs price, no Point conversion
+   double range     = h - l;
    double candleMin = atr * CandleATR_Factor;
    if(range < candleMin) return;
 
@@ -266,7 +280,7 @@ void TryOpenTrade()
 
    if(MomentumMode)
    {
-      // Trend-following: trade in the direction of the completed candle
+      // Trend-following: trade direction of completed candle
       if     (c > o) { dir = ORDER_TYPE_BUY;  price = ask; }
       else if(c < o) { dir = ORDER_TYPE_SELL; price = bid; }
       else           return;  // doji — skip
@@ -280,8 +294,8 @@ void TryOpenTrade()
    }
 
    // ── SL / TP — all in price (no * _Point) ───────────────────────
-   // iATR already returns values in price units (e.g. $2.54 for XAUUSD),
-   // so multiplying by _Point again would make the SL microscopic.
+   // iATR returns price units (e.g. $2.54 for XAUUSD).
+   // Multiplying by _Point would make SL microscopic — don't do it.
    double slDist = atr * SL_ATR_Factor;
    double tpDist = (TP_ATR_Factor > 0.0) ? atr * TP_ATR_Factor : 0.0;
 
@@ -309,7 +323,8 @@ void TryOpenTrade()
             " | Range=", DoubleToString(range, 2),
             " | SL±",    DoubleToString(slDist,2),
             " | TP=",    (tpDist > 0 ? DoubleToString(tpDist,2) : "OFF"),
-            " | Mode=",  (MomentumMode ? "Momentum" : "Reversal"));
+            " | Mode=",  (MomentumMode ? "Momentum" : "Reversal"),
+            " | SGT=",   TimeToString(GetSGT(), TIME_MINUTES));
    }
    else
       Print("Order FAIL [", trade.ResultRetcode(), "] ",
@@ -332,14 +347,14 @@ void ManageTrades()
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
-      if(PositionGetString(POSITION_SYMBOL)      != Symbol())      continue;
-      if((int)PositionGetInteger(POSITION_MAGIC) != MagicNumber)   continue;
+      if(PositionGetString(POSITION_SYMBOL)      != Symbol())    continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
 
-      ENUM_POSITION_TYPE ptype   = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      double             op      = PositionGetDouble(POSITION_PRICE_OPEN);
-      double             sl      = PositionGetDouble(POSITION_SL);
-      double             tp      = PositionGetDouble(POSITION_TP);
-      datetime           opened  = (datetime)PositionGetInteger(POSITION_TIME);
+      ENUM_POSITION_TYPE ptype  = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double             op     = PositionGetDouble(POSITION_PRICE_OPEN);
+      double             sl     = PositionGetDouble(POSITION_SL);
+      double             tp     = PositionGetDouble(POSITION_TP);
+      datetime           opened = (datetime)PositionGetInteger(POSITION_TIME);
 
       double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
@@ -356,7 +371,7 @@ void ManageTrades()
       }
 
       // ── Trailing stop ──────────────────────────────────────────
-      // profit in price (same units as ATR, same units as tsStart)
+      // profit in price (same units as ATR and tsStart)
       double profit = (ptype == POSITION_TYPE_BUY) ? (bid - op) : (op - ask);
 
       if(profit >= tsStart)
@@ -365,7 +380,7 @@ void ManageTrades()
                         ? NormalizeDouble(bid - tsStep, _Digits)
                         : NormalizeDouble(ask + tsStep, _Digits);
 
-         // Only modify when the new SL is strictly better for the position
+         // Only modify when new SL is strictly better for the position
          bool improve = (ptype == POSITION_TYPE_BUY)
                         ? (newSL > sl)
                         : (sl == 0.0 || newSL < sl);
@@ -381,10 +396,11 @@ void ManageTrades()
 //===================================================================
 void DrawInfoPanel()
 {
-   double atr = GetATR();
-   double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   datetime sg = ToSGT(TimeCurrent());
+   double atr    = GetATR();
+   double ask    = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+   double bid    = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   datetime sgt  = GetSGT();
+   int gmtOffset = BrokerGMTOffset();
 
    string atrOk  = (atr >= ATR_Min_Filter) ? "[OK]" : "[LOW - no trade]";
    string sessStr;
@@ -392,7 +408,7 @@ void DrawInfoPanel()
    else                     sessStr = InSession() ? "OPEN  [OK]" : "CLOSED [waiting]";
 
    string info =
-      "╔══ ATR AUTO SCALPER v2.0  (MT5) ══════╗\n"
+      "╔══ ATR AUTO SCALPER v2.1  (MT5) ══════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "  Mode      : " + (MomentumMode ? "MOMENTUM" : "REVERSAL")           + "\n"
       "────────────────────────────────────────\n"
@@ -413,7 +429,8 @@ void DrawInfoPanel()
                           ? TimeToString(LastEntry, TIME_DATE|TIME_SECONDS)
                           : "---")                                            + "\n"
       "────────────────────────────────────────\n"
-      "  SG Time   : " + TimeToString(sg, TIME_MINUTES)                      + "\n"
+      "  SGT (auto): " + TimeToString(sgt, TIME_MINUTES)
+                       + "  [broker UTC+" + IntegerToString(gmtOffset) + "]" + "\n"
       "  Session   : " + sessStr                                              + "\n"
       "  Bid / Ask : " + DoubleToString(bid, _Digits)
                        + " / " + DoubleToString(ask, _Digits)                + "\n"
