@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|              ATR_AUTO_LOCK_SCALPER EA  (MT5 v2.1)               |
+//|              ATR_AUTO_LOCK_SCALPER EA  (MT5 v2.2)               |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -14,10 +14,11 @@
 //|  9. CandleATR_Factor— default 200 → 1.5 (sensible multiplier)  |
 //| 10. IsNewBar()      — entry checked once per bar, not every tick |
 //| 11. SGT auto-detect — TimeGMT()+8h, no manual offset needed     |
+//| 12. ADX auto-detect — H1 ADX decides Momentum vs Reversal mode  |
 //+------------------------------------------------------------------+
 #property copyright "ATR Auto Scalper"
-#property version   "2.10"
-#property description "ATR-based M1 scalper | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
+#property version   "2.20"
+#property description "ATR M1 scalper | ADX auto mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
 
@@ -59,10 +60,26 @@ input double TSstep_ATR_Factor   = 0.4;
 // Trail SL N × ATR behind current price.
 // e.g. 0.4 × $2.50 = $1.00 trail step.
 
-input group "=== Entry Mode ==="
-input bool   MomentumMode        = false;
+input group "=== Mode Detection ==="
+input bool             AutoModeDetect  = true;
+// true  = EA auto-selects Momentum/Reversal using H1 ADX (recommended)
+// false = use manual MomentumMode input below
+
+input bool             MomentumMode    = false;
+// Only used when AutoModeDetect = false.
 // false = REVERSAL  → BUY red candle  / SELL green candle
 // true  = MOMENTUM  → BUY green candle / SELL red candle
+
+input int              ADX_Period      = 14;
+// ADX period on the higher timeframe chart.
+
+input ENUM_TIMEFRAMES  ADX_TimeFrame   = PERIOD_H1;
+// Timeframe for ADX trend detection. H1 recommended for M1 scalping.
+
+input double           ADX_Trend_Level = 25.0;
+// ADX >= this value → TRENDING → Momentum mode
+// ADX <  this value → RANGING  → Reversal mode
+// Standard: 20 = weak trend, 25 = trend, 40 = strong trend
 
 input group "=== Session Filter (Singapore Time — auto-detected) ==="
 input bool   EnableSessionFilter = true;
@@ -78,11 +95,14 @@ datetime LastEntry   = 0;
 double   TodayProfit = 0.0;
 int      TodayDate   = 0;
 int      ATR_Handle  = INVALID_HANDLE;
+int      ADX_Handle  = INVALID_HANDLE;
 datetime LastBarTime = 0;
 
 // ── Tick-level cache (set once at top of OnTick) ───────────────────
-double g_ATR      = 0.0;   // avoids 3× CopyBuffer per tick
-bool   g_IsNewBar = false; // avoids duplicate IsNewBar() calls
+double g_ATR        = 0.0;    // avoids 3× CopyBuffer per tick
+double g_ADX        = 0.0;    // cached H1 ADX value
+bool   g_IsTrending = false;  // true = ADX >= ADX_Trend_Level
+bool   g_IsNewBar   = false;  // avoids duplicate IsNewBar() calls
 
 //===================================================================
 //  INIT / DEINIT
@@ -96,6 +116,13 @@ int OnInit()
       return INIT_FAILED;
    }
 
+   ADX_Handle = iADX(Symbol(), ADX_TimeFrame, ADX_Period);
+   if(ADX_Handle == INVALID_HANDLE)
+   {
+      Print("ERROR: Cannot create ADX indicator handle.");
+      return INIT_FAILED;
+   }
+
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(50);
    trade.SetTypeFilling(GetFillType());
@@ -103,14 +130,14 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   // Show auto-detected broker GMT offset in log for verification
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("ATR Auto Scalper MT5 v2.1 | Symbol=", Symbol(),
-         " | Mode=",   (MomentumMode ? "MOMENTUM" : "REVERSAL"),
-         " | Magic=",  MagicNumber,
-         " | SL=",     SL_ATR_Factor, "xATR",
-         " | TS@",     TSstart_ATR_Factor, "xATR",
+   Print("ATR Auto Scalper MT5 v2.2 | Symbol=", Symbol(),
+         " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
+         " | ADX_TF=",   EnumToString(ADX_TimeFrame),
+         " | ADX_Level=",ADX_Trend_Level,
+         " | SL=",       SL_ATR_Factor, "xATR",
+         " | TS@",       TSstart_ATR_Factor, "xATR",
          " | BrokerGMT=UTC+", detectedOffset, " (auto)");
 
    return INIT_SUCCEEDED;
@@ -118,8 +145,8 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
-   if(ATR_Handle != INVALID_HANDLE)
-      IndicatorRelease(ATR_Handle);
+   if(ATR_Handle != INVALID_HANDLE) IndicatorRelease(ATR_Handle);
+   if(ADX_Handle != INVALID_HANDLE) IndicatorRelease(ADX_Handle);
    Comment("");
 }
 
@@ -127,23 +154,16 @@ void OnDeinit(const int reason)
 //  HELPERS
 //===================================================================
 
-// Return day-of-month from a datetime
 int DayOfTime(datetime t)
 {
-   MqlDateTime s;
-   TimeToStruct(t, s);
-   return s.day;
+   MqlDateTime s; TimeToStruct(t, s); return s.day;
 }
 
-// Return hour from a datetime
 int HourOfTime(datetime t)
 {
-   MqlDateTime s;
-   TimeToStruct(t, s);
-   return s.hour;
+   MqlDateTime s; TimeToStruct(t, s); return s.hour;
 }
 
-// Return midnight of the day containing t
 datetime StartOfDay(datetime t)
 {
    MqlDateTime s;
@@ -152,9 +172,7 @@ datetime StartOfDay(datetime t)
    return StructToTime(s);
 }
 
-// ── SGT auto-detection ─────────────────────────────────────────────
-// TimeGMT() returns true UTC from the MT5 terminal — no manual broker
-// offset needed. SGT = UTC+8, so we simply add 8 hours to UTC.
+// SGT = UTC+8, auto-detected via TimeGMT()
 datetime GetSGT()
 {
    return (datetime)((long)TimeGMT() + 8 * 3600);
@@ -166,13 +184,11 @@ bool InSession()
    return (h >= SG_Start && h < SG_End);
 }
 
-// Auto-detect broker GMT offset (for display only)
 int BrokerGMTOffset()
 {
    return (int)((TimeCurrent() - TimeGMT()) / 3600);
 }
 
-// Detect correct order fill type for this symbol/broker
 ENUM_ORDER_TYPE_FILLING GetFillType()
 {
    long mode = (long)SymbolInfoInteger(Symbol(), SYMBOL_FILLING_MODE);
@@ -181,7 +197,7 @@ ENUM_ORDER_TYPE_FILLING GetFillType()
    return ORDER_FILLING_RETURN;
 }
 
-// ATR from last COMPLETED bar (shift 1) — avoids mid-bar noise
+// ATR from last COMPLETED M1 bar (shift 1)
 double GetATR()
 {
    double buf[];
@@ -190,7 +206,16 @@ double GetATR()
    return buf[0];
 }
 
-// Count open positions belonging to this EA on this symbol
+// ADX main line from last COMPLETED bar on ADX_TimeFrame (shift 1)
+// Buffer 0 = main ADX line, Buffer 1 = +DI, Buffer 2 = -DI
+double GetADX()
+{
+   double buf[];
+   ArraySetAsSeries(buf, true);
+   if(CopyBuffer(ADX_Handle, 0, 1, 1, buf) < 1) return 0.0;
+   return buf[0];
+}
+
 int CountMyPositions()
 {
    int count = 0;
@@ -205,26 +230,21 @@ int CountMyPositions()
    return count;
 }
 
-// Returns true once per new M1 bar — prevents multiple entries per bar
 bool IsNewBar()
 {
    datetime t = iTime(Symbol(), PERIOD_M1, 0);
-   if(t != LastBarTime)
-   {
-      LastBarTime = t;
-      return true;
-   }
+   if(t != LastBarTime) { LastBarTime = t; return true; }
    return false;
 }
 
 //===================================================================
-//  DAILY P/L TRACKER  (called once per bar, not every tick)
+//  DAILY P/L TRACKER  (once per bar)
 //===================================================================
 void UpdateTodayProfit()
 {
    int today = DayOfTime(TimeCurrent());
    if(TodayDate != today)
-      TodayDate = today;   // TodayProfit reset below unconditionally
+      TodayDate = today;
 
    TodayProfit = 0.0;
    if(!HistorySelect(StartOfDay(TimeCurrent()), TimeCurrent())) return;
@@ -250,53 +270,49 @@ void UpdateTodayProfit()
 //===================================================================
 void TryOpenTrade()
 {
-   // Entry evaluated once per new M1 bar only (g_IsNewBar set in OnTick)
    if(!g_IsNewBar) return;
-
    if(EnableSessionFilter && !InSession()) return;
-
-   // g_ATR set once in OnTick — no redundant CopyBuffer call here
    if(g_ATR <= 0.0 || g_ATR < ATR_Min_Filter) return;
-
    if((long)(TimeCurrent() - LastEntry) < (long)(CooldownMinutes * 60)) return;
    if(CountMyPositions() > 0) return;
 
    // ── Signal from bar 1 (last COMPLETED candle) ──────────────────
-   // Bar 0 flips every tick mid-candle — bar 1 is stable.
    double o = iOpen(Symbol(),  PERIOD_M1, 1);
    double h = iHigh(Symbol(),  PERIOD_M1, 1);
    double l = iLow(Symbol(),   PERIOD_M1, 1);
    double c = iClose(Symbol(), PERIOD_M1, 1);
 
-   // Candle range filter — price vs price, no Point conversion
-   double range     = h - l;
-   double candleMin = g_ATR * CandleATR_Factor;
-   if(range < candleMin) return;
+   if((h - l) < g_ATR * CandleATR_Factor) return;
 
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
+   // ── Auto Mode Detection ────────────────────────────────────────
+   // AutoModeDetect = true  → use H1 ADX to decide
+   //   ADX >= ADX_Trend_Level → MOMENTUM (trade with candle)
+   //   ADX <  ADX_Trend_Level → REVERSAL (fade the candle)
+   // AutoModeDetect = false → use manual MomentumMode input
+   bool useMomentum = AutoModeDetect ? g_IsTrending : MomentumMode;
+
    ENUM_ORDER_TYPE dir;
    double          price;
 
-   if(MomentumMode)
+   if(useMomentum)
    {
-      // Trend-following: trade direction of completed candle
+      // MOMENTUM: trade in the direction of the completed candle
       if     (c > o) { dir = ORDER_TYPE_BUY;  price = ask; }
       else if(c < o) { dir = ORDER_TYPE_SELL; price = bid; }
-      else           return;  // doji — skip
+      else           return;
    }
    else
    {
-      // Reversal: fade the completed candle
+      // REVERSAL: fade the completed candle
       if     (c > o) { dir = ORDER_TYPE_SELL; price = bid; }
       else if(c < o) { dir = ORDER_TYPE_BUY;  price = ask; }
-      else           return;  // doji — skip
+      else           return;
    }
 
    // ── SL / TP — all in price (no * _Point) ───────────────────────
-   // iATR returns price units (e.g. $2.54 for XAUUSD).
-   // Multiplying by _Point would make SL microscopic — don't do it.
    double slDist = g_ATR * SL_ATR_Factor;
    double tpDist = (TP_ATR_Factor > 0.0) ? g_ATR * TP_ATR_Factor : 0.0;
 
@@ -320,12 +336,13 @@ void TryOpenTrade()
    {
       LastEntry = TimeCurrent();
       Print("OPEN ", (dir == ORDER_TYPE_BUY ? "BUY " : "SELL"),
-            " | ATR=",   DoubleToString(g_ATR,  2),
-            " | Range=", DoubleToString(range, 2),
-            " | SL±",    DoubleToString(slDist,2),
-            " | TP=",    (tpDist > 0 ? DoubleToString(tpDist,2) : "OFF"),
-            " | Mode=",  (MomentumMode ? "Momentum" : "Reversal"),
-            " | SGT=",   TimeToString(GetSGT(), TIME_MINUTES));
+            " | Mode=",    (useMomentum ? "MOMENTUM" : "REVERSAL"),
+            " | ADX=",     DoubleToString(g_ADX,  1),
+            " | ATR=",     DoubleToString(g_ATR,  2),
+            " | Range=",   DoubleToString(h - l,  2),
+            " | SL±",      DoubleToString(slDist, 2),
+            " | TP=",      (tpDist > 0 ? DoubleToString(tpDist, 2) : "OFF"),
+            " | SGT=",     TimeToString(GetSGT(), TIME_MINUTES));
    }
    else
       Print("Order FAIL [", trade.ResultRetcode(), "] ",
@@ -333,14 +350,12 @@ void TryOpenTrade()
 }
 
 //===================================================================
-//  TRADE MANAGEMENT  (runs every tick)
+//  TRADE MANAGEMENT  (every tick)
 //===================================================================
 void ManageTrades()
 {
-   // g_ATR set once in OnTick — no redundant CopyBuffer call here
    if(g_ATR <= 0.0) return;
 
-   // All distances in price — consistent with how SL was set at entry
    double tsStart = g_ATR * TSstart_ATR_Factor;
    double tsStep  = g_ATR * TSstep_ATR_Factor;
 
@@ -360,7 +375,7 @@ void ManageTrades()
       double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
       double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
-      // ── Expiry: force close after N hours ──────────────────────
+      // ── Expiry ─────────────────────────────────────────────────
       if((long)(TimeCurrent() - opened) > (long)(ExpireHours * 3600))
       {
          if(trade.PositionClose(ticket))
@@ -372,7 +387,6 @@ void ManageTrades()
       }
 
       // ── Trailing stop ──────────────────────────────────────────
-      // profit in price (same units as ATR and tsStart)
       double profit = (ptype == POSITION_TYPE_BUY) ? (bid - op) : (op - ask);
 
       if(profit >= tsStart)
@@ -381,7 +395,6 @@ void ManageTrades()
                         ? NormalizeDouble(bid - tsStep, _Digits)
                         : NormalizeDouble(ask + tsStep, _Digits);
 
-         // Only modify when new SL is strictly better for the position
          bool improve = (ptype == POSITION_TYPE_BUY)
                         ? (newSL > sl)
                         : (sl == 0.0 || newSL < sl);
@@ -397,21 +410,37 @@ void ManageTrades()
 //===================================================================
 void DrawInfoPanel()
 {
-   // Use g_ATR cached this tick — no extra CopyBuffer call
    double ask    = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double bid    = SymbolInfoDouble(Symbol(), SYMBOL_BID);
    datetime sgt  = GetSGT();
    int gmtOffset = BrokerGMTOffset();
 
+   // Determine what mode is actually active right now
+   bool   useMomentum  = AutoModeDetect ? g_IsTrending : MomentumMode;
+   string activeMode   = useMomentum ? "MOMENTUM" : "REVERSAL";
+   string modeSource   = AutoModeDetect ? "AUTO-ADX" : "MANUAL";
+
+   // ADX status string
+   string adxStr;
+   if(!AutoModeDetect)
+      adxStr = "DISABLED (manual mode)";
+   else
+      adxStr = DoubleToString(g_ADX, 1)
+             + "  [" + EnumToString(ADX_TimeFrame) + "]"
+             + "  thr=" + DoubleToString(ADX_Trend_Level, 0)
+             + "  → " + (g_IsTrending ? "TREND" : "RANGE");
+
    string atrOk  = (g_ATR >= ATR_Min_Filter) ? "[OK]" : "[LOW - no trade]";
-   string sessStr;
-   if(!EnableSessionFilter) sessStr = "DISABLED";
-   else                     sessStr = InSession() ? "OPEN  [OK]" : "CLOSED [waiting]";
+   string sessStr = !EnableSessionFilter ? "DISABLED"
+                  : (InSession() ? "OPEN  [OK]" : "CLOSED [waiting]");
 
    string info =
-      "╔══ ATR AUTO SCALPER v2.1  (MT5) ══════╗\n"
+      "╔══ ATR AUTO SCALPER v2.2  (MT5) ══════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
-      "  Mode      : " + (MomentumMode ? "MOMENTUM" : "REVERSAL")           + "\n"
+      "────────────────────────────────────────\n"
+      "  Mode      : " + activeMode
+                       + "  [" + modeSource + "]"                           + "\n"
+      "  ADX(" + IntegerToString(ADX_Period) + ")  : " + adxStr             + "\n"
       "────────────────────────────────────────\n"
       "  ATR(14)   : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
@@ -445,14 +474,16 @@ void DrawInfoPanel()
 //===================================================================
 void OnTick()
 {
-   g_ATR      = GetATR();    // single CopyBuffer call — shared by all functions
-   g_IsNewBar = IsNewBar();  // single new-bar check — shared by all functions
+   g_ATR        = GetATR();
+   g_ADX        = GetADX();
+   g_IsTrending = (g_ADX >= ADX_Trend_Level);  // true = trend → Momentum
+   g_IsNewBar   = IsNewBar();
 
    if(g_IsNewBar)
-      UpdateTodayProfit();   // only recalc P/L on bar open, not every tick
+      UpdateTodayProfit();
 
-   ManageTrades();    // every tick — accurate expiry + trailing
-   TryOpenTrade();    // entry gated by g_IsNewBar — once per bar
+   ManageTrades();
+   TryOpenTrade();
    DrawInfoPanel();
 }
 //+------------------------------------------------------------------+
