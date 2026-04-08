@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|              ATR_AUTO_LOCK_SCALPER EA  (MT5 v2.2)               |
+//|                    PROJECT ATR  (MT5 v2.3)                       |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -16,9 +16,9 @@
 //| 11. SGT auto-detect — TimeGMT()+8h, no manual offset needed     |
 //| 12. ADX auto-detect — H1 ADX decides Momentum vs Reversal mode  |
 //+------------------------------------------------------------------+
-#property copyright "ATR Auto Scalper"
-#property version   "2.20"
-#property description "ATR M1 scalper | ADX auto mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
+#property copyright "Project ATR"
+#property version   "2.30"
+#property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
 
@@ -132,7 +132,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("ATR Auto Scalper MT5 v2.2 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.3 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -329,8 +329,8 @@ void TryOpenTrade()
    }
 
    bool ok = (dir == ORDER_TYPE_BUY)
-             ? trade.Buy (LotSize, Symbol(), price, sl, tp, "ATR_SCALPER")
-             : trade.Sell(LotSize, Symbol(), price, sl, tp, "ATR_SCALPER");
+             ? trade.Buy (LotSize, Symbol(), price, sl, tp, "Project ATR")
+             : trade.Sell(LotSize, Symbol(), price, sl, tp, "Project ATR");
 
    if(ok)
    {
@@ -439,7 +439,7 @@ void DrawInfoPanel()
                   : (InSession() ? "OPEN  [OK]" : "CLOSED [waiting]");
 
    string info =
-      "╔══ ATR AUTO SCALPER v2.2  (MT5) ══════╗\n"
+      "╔══ PROJECT ATR  v2.3  (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
