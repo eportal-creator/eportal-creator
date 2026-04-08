@@ -80,6 +80,10 @@ int      TodayDate   = 0;
 int      ATR_Handle  = INVALID_HANDLE;
 datetime LastBarTime = 0;
 
+// ── Tick-level cache (set once at top of OnTick) ───────────────────
+double g_ATR      = 0.0;   // avoids 3× CopyBuffer per tick
+bool   g_IsNewBar = false; // avoids duplicate IsNewBar() calls
+
 //===================================================================
 //  INIT / DEINIT
 //===================================================================
@@ -214,16 +218,13 @@ bool IsNewBar()
 }
 
 //===================================================================
-//  DAILY P/L TRACKER
+//  DAILY P/L TRACKER  (called once per bar, not every tick)
 //===================================================================
 void UpdateTodayProfit()
 {
    int today = DayOfTime(TimeCurrent());
    if(TodayDate != today)
-   {
-      TodayDate   = today;
-      TodayProfit = 0.0;
-   }
+      TodayDate = today;   // TodayProfit reset below unconditionally
 
    TodayProfit = 0.0;
    if(!HistorySelect(StartOfDay(TimeCurrent()), TimeCurrent())) return;
@@ -249,13 +250,13 @@ void UpdateTodayProfit()
 //===================================================================
 void TryOpenTrade()
 {
-   // Entry evaluated once per new M1 bar only
-   if(!IsNewBar()) return;
+   // Entry evaluated once per new M1 bar only (g_IsNewBar set in OnTick)
+   if(!g_IsNewBar) return;
 
    if(EnableSessionFilter && !InSession()) return;
 
-   double atr = GetATR();
-   if(atr <= 0.0 || atr < ATR_Min_Filter) return;
+   // g_ATR set once in OnTick — no redundant CopyBuffer call here
+   if(g_ATR <= 0.0 || g_ATR < ATR_Min_Filter) return;
 
    if((long)(TimeCurrent() - LastEntry) < (long)(CooldownMinutes * 60)) return;
    if(CountMyPositions() > 0) return;
@@ -269,7 +270,7 @@ void TryOpenTrade()
 
    // Candle range filter — price vs price, no Point conversion
    double range     = h - l;
-   double candleMin = atr * CandleATR_Factor;
+   double candleMin = g_ATR * CandleATR_Factor;
    if(range < candleMin) return;
 
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
@@ -296,8 +297,8 @@ void TryOpenTrade()
    // ── SL / TP — all in price (no * _Point) ───────────────────────
    // iATR returns price units (e.g. $2.54 for XAUUSD).
    // Multiplying by _Point would make SL microscopic — don't do it.
-   double slDist = atr * SL_ATR_Factor;
-   double tpDist = (TP_ATR_Factor > 0.0) ? atr * TP_ATR_Factor : 0.0;
+   double slDist = g_ATR * SL_ATR_Factor;
+   double tpDist = (TP_ATR_Factor > 0.0) ? g_ATR * TP_ATR_Factor : 0.0;
 
    double sl, tp;
    if(dir == ORDER_TYPE_BUY)
@@ -319,7 +320,7 @@ void TryOpenTrade()
    {
       LastEntry = TimeCurrent();
       Print("OPEN ", (dir == ORDER_TYPE_BUY ? "BUY " : "SELL"),
-            " | ATR=",   DoubleToString(atr,   2),
+            " | ATR=",   DoubleToString(g_ATR,  2),
             " | Range=", DoubleToString(range, 2),
             " | SL±",    DoubleToString(slDist,2),
             " | TP=",    (tpDist > 0 ? DoubleToString(tpDist,2) : "OFF"),
@@ -336,12 +337,12 @@ void TryOpenTrade()
 //===================================================================
 void ManageTrades()
 {
-   double atr = GetATR();
-   if(atr <= 0.0) return;
+   // g_ATR set once in OnTick — no redundant CopyBuffer call here
+   if(g_ATR <= 0.0) return;
 
    // All distances in price — consistent with how SL was set at entry
-   double tsStart = atr * TSstart_ATR_Factor;
-   double tsStep  = atr * TSstep_ATR_Factor;
+   double tsStart = g_ATR * TSstart_ATR_Factor;
+   double tsStep  = g_ATR * TSstep_ATR_Factor;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -396,13 +397,13 @@ void ManageTrades()
 //===================================================================
 void DrawInfoPanel()
 {
-   double atr    = GetATR();
+   // Use g_ATR cached this tick — no extra CopyBuffer call
    double ask    = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double bid    = SymbolInfoDouble(Symbol(), SYMBOL_BID);
    datetime sgt  = GetSGT();
    int gmtOffset = BrokerGMTOffset();
 
-   string atrOk  = (atr >= ATR_Min_Filter) ? "[OK]" : "[LOW - no trade]";
+   string atrOk  = (g_ATR >= ATR_Min_Filter) ? "[OK]" : "[LOW - no trade]";
    string sessStr;
    if(!EnableSessionFilter) sessStr = "DISABLED";
    else                     sessStr = InSession() ? "OPEN  [OK]" : "CLOSED [waiting]";
@@ -412,16 +413,16 @@ void DrawInfoPanel()
       "  Symbol    : " + Symbol()                                            + "\n"
       "  Mode      : " + (MomentumMode ? "MOMENTUM" : "REVERSAL")           + "\n"
       "────────────────────────────────────────\n"
-      "  ATR(14)   : " + DoubleToString(atr, 2)
+      "  ATR(14)   : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
                        + "  " + atrOk                                        + "\n"
-      "  Candle≥   : " + DoubleToString(atr * CandleATR_Factor, 2)           + "\n"
-      "  SL dist   : " + DoubleToString(atr * SL_ATR_Factor,    2)           + "\n"
+      "  Candle≥   : " + DoubleToString(g_ATR * CandleATR_Factor, 2)         + "\n"
+      "  SL dist   : " + DoubleToString(g_ATR * SL_ATR_Factor,    2)         + "\n"
       "  TP dist   : " + (TP_ATR_Factor > 0
-                          ? DoubleToString(atr * TP_ATR_Factor, 2)
+                          ? DoubleToString(g_ATR * TP_ATR_Factor, 2)
                           : "DISABLED (trailing only)")                       + "\n"
-      "  TS start  : +" + DoubleToString(atr * TSstart_ATR_Factor, 2)        + "\n"
-      "  TS step   : "  + DoubleToString(atr * TSstep_ATR_Factor,  2)        + "\n"
+      "  TS start  : +" + DoubleToString(g_ATR * TSstart_ATR_Factor, 2)      + "\n"
+      "  TS step   : "  + DoubleToString(g_ATR * TSstep_ATR_Factor,  2)      + "\n"
       "────────────────────────────────────────\n"
       "  Positions : " + IntegerToString(CountMyPositions())                  + "\n"
       "  Today P/L : $" + DoubleToString(TodayProfit, 2)                     + "\n"
@@ -444,9 +445,14 @@ void DrawInfoPanel()
 //===================================================================
 void OnTick()
 {
-   UpdateTodayProfit();
+   g_ATR      = GetATR();    // single CopyBuffer call — shared by all functions
+   g_IsNewBar = IsNewBar();  // single new-bar check — shared by all functions
+
+   if(g_IsNewBar)
+      UpdateTodayProfit();   // only recalc P/L on bar open, not every tick
+
    ManageTrades();    // every tick — accurate expiry + trailing
-   TryOpenTrade();    // entry gated by IsNewBar() — once per bar
+   TryOpenTrade();    // entry gated by g_IsNewBar — once per bar
    DrawInfoPanel();
 }
 //+------------------------------------------------------------------+
