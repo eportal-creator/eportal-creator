@@ -83,7 +83,7 @@ input double           ADX_Trend_Level = 25.0;
 
 input group "=== Session Filter (Singapore Time — auto-detected) ==="
 input bool   EnableSessionFilter = true;
-input int    SG_Start            = 7;     // Session open  (SGT hour, 24h)
+input int    SG_Start            = 6;     // Session open  (SGT hour, 24h)
 input int    SG_End              = 17;    // Session close (SGT hour, 24h)
 // SGT = UTC+8. Broker GMT offset is auto-detected via TimeGMT().
 // No manual offset entry needed — works on any broker.
