@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.7)                       |
+//|                    PROJECT ATR  (MT5 v2.8)                       |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -26,12 +26,15 @@
 //|      Catches fast-starting M1 rallies that lag in bar-1 DI.     |
 //|      Bar-0 DI still requires M1 ADX>=threshold to filter noise. |
 //| 17. M1 Ranging SL boost (v2.7) — when M1 ADX < threshold        |
-//|      (default 15 = very choppy), SL widens to SL_ATR_Ranging_  |
-//|      Mult (default 2.0×ATR) to survive M1 noise before H1 trend  |
-//|      takes hold. Prevents stop-hunts in low-ADX choppy M1.      |
+//|      (default 15), SL widens to SL_ATR_Ranging_Mult (2.0×ATR). |
+//|      Survives M1 noise before H1 trend takes hold.              |
+//| 18. M1 DI spread filter (v2.8) — block SELL if M1 +DI exceeds  |
+//|      -DI by >= M1_DI_Spread_Filter regardless of M1 ADX level.  |
+//|      Catches clear M1 bullish bias the ADX-gated guard misses.  |
+//|      Surgical: blocks late bounce entries, keeps early wins.     |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.70"
+#property version   "2.80"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -44,7 +47,7 @@ CTrade trade;
 
 input group "=== Trade ==="
 input double LotSize             = 0.01;   // Lot size
-input int    MagicNumber         = 5555;   // EA identifier
+input int    MagicNumber         = 6666;   // EA identifier
 input double ExpireHours         = 0.5;    // Force-close after N hours
 input int    CooldownMinutes     = 5;      // Min gap between entries (minutes)
 
@@ -73,6 +76,14 @@ input double M1_Ranging_Threshold = 15.0;
 // M1 ADX below this = very choppy → use SL_ATR_Ranging_Mult (wider).
 // M1 ADX above this = trending   → use SL_ATR_Factor (normal).
 // Recommended: 15 (very choppy). Raise to 20 to widen more often.
+
+input double M1_DI_Spread_Filter = 8.0;
+// Block SELL if M1 +DI exceeds -DI by >= this value (any M1 ADX level).
+// Block BUY  if M1 -DI exceeds +DI by >= this value (any M1 ADX level).
+// Catches clear M1 directional bias that ADX-gated guard (fix 15/16)
+// misses when M1 ADX < 25. Surgical — only blocks when M1 DI strongly
+// disagrees with trade direction (e.g. +DI=24 vs -DI=14 → spread 10 ≥ 8).
+// Set 0 to disable. Recommended: 8.0.
 
 input double TP_ATR_Factor       = 0.0;
 // Take profit = N × ATR (0 = disabled → trailing stop only).
@@ -173,7 +184,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.7 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.8 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -382,6 +393,18 @@ void TryOpenTrade()
 
       if(dir == ORDER_TYPE_SELL && (m1BullBar1 || m1BullBar0)) return;
       if(dir == ORDER_TYPE_BUY  && (m1BearBar1 || m1BearBar0)) return;
+
+      // ── M1 DI spread filter — unconditional (v2.8) ────────────
+      // Block if M1 DI strongly disagrees regardless of M1 ADX level.
+      // Catches clear M1 directional bias the ADX-gated guard misses
+      // (e.g. M1 ADX=17 but +DI=24 >> -DI=14 → spread 10 ≥ 8).
+      // Uses bar-1 (completed) values for stability.
+      // Set M1_DI_Spread_Filter=0 to disable.
+      if(M1_DI_Spread_Filter > 0.0)
+      {
+         if(dir == ORDER_TYPE_SELL && (g_M1PlusDI  - g_M1MinusDI) >= M1_DI_Spread_Filter) return;
+         if(dir == ORDER_TYPE_BUY  && (g_M1MinusDI - g_M1PlusDI)  >= M1_DI_Spread_Filter) return;
+      }
    }
    else
    {
@@ -531,8 +554,24 @@ void DrawInfoPanel()
    string sessStr = !EnableSessionFilter ? "DISABLED"
                   : (InSession() ? "OPEN  [OK]" : "CLOSED [waiting]");
 
+   // M1 DI spread for panel display
+   double m1DiSpread   = g_M1PlusDI - g_M1MinusDI;   // positive = bull, negative = bear
+   string spreadSign   = (m1DiSpread >= 0) ? "+" : "";
+   string spreadBlock  = "";
+   if(M1_DI_Spread_Filter > 0.0)
+   {
+      if(m1DiSpread >= M1_DI_Spread_Filter)
+         spreadBlock = "  [SELL BLOCKED ▲" + DoubleToString(m1DiSpread, 1) + "]";
+      else if(-m1DiSpread >= M1_DI_Spread_Filter)
+         spreadBlock = "  [BUY  BLOCKED ▼" + DoubleToString(-m1DiSpread, 1) + "]";
+      else
+         spreadBlock = "  [OK  spread=" + spreadSign + DoubleToString(m1DiSpread, 1) + "]";
+   }
+   else
+      spreadBlock = "  [DISABLED]";
+
    string info =
-      "╔══ PROJECT ATR  v2.7  (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.8  (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -551,6 +590,10 @@ void DrawInfoPanel()
                        + (g_M1ADX >= ADX_Trend_Level
                           ? (g_M1PlusDI0 > g_M1MinusDI0 ? "  [M1-BULL⚠ bar0]" : "  [M1-BEAR⚠ bar0]")
                           : "  [M1-RANGE bar0]")                             + "\n"
+      "  DI spread : thr=" + (M1_DI_Spread_Filter > 0.0
+                              ? DoubleToString(M1_DI_Spread_Filter, 1)
+                              : "OFF")
+                           + spreadBlock                                      + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
