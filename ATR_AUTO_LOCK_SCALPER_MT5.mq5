@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.6)                       |
+//|                    PROJECT ATR  (MT5 v2.7)                       |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -25,9 +25,13 @@
 //|      (last completed) AND bar 0 (current real-time) DI values.  |
 //|      Catches fast-starting M1 rallies that lag in bar-1 DI.     |
 //|      Bar-0 DI still requires M1 ADX>=threshold to filter noise. |
+//| 17. M1 Ranging SL boost (v2.7) — when M1 ADX < threshold        |
+//|      (default 15 = very choppy), SL widens to SL_ATR_Ranging_  |
+//|      Mult (default 2.0×ATR) to survive M1 noise before H1 trend  |
+//|      takes hold. Prevents stop-hunts in low-ADX choppy M1.      |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.60"
+#property version   "2.70"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -56,7 +60,19 @@ input double CandleATR_Factor    = 1.5;
 
 input double SL_ATR_Factor       = 1.5;
 // Stop loss = N × ATR from entry price (dollars for XAUUSD).
-// e.g. 1.5 × $2.50 ATR = $3.75 SL per 0.01 lot.
+// Used when M1 ADX >= M1_Ranging_Threshold (M1 is trending).
+// e.g. 1.5 × $2.90 ATR = $4.35 SL per 0.01 lot.
+
+input double SL_ATR_Ranging_Mult = 2.0;
+// Wider SL multiplier when M1 ADX < M1_Ranging_Threshold (choppy M1).
+// In a ranging M1, normal SL gets clipped by noise even when H1
+// direction is correct. Wider SL survives the chop until H1 takes hold.
+// e.g. 2.0 × $2.90 ATR = $5.80 SL per 0.01 lot.
+
+input double M1_Ranging_Threshold = 15.0;
+// M1 ADX below this = very choppy → use SL_ATR_Ranging_Mult (wider).
+// M1 ADX above this = trending   → use SL_ATR_Factor (normal).
+// Recommended: 15 (very choppy). Raise to 20 to widen more often.
 
 input double TP_ATR_Factor       = 0.0;
 // Take profit = N × ATR (0 = disabled → trailing stop only).
@@ -157,11 +173,12 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.6 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.7 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
-         " | SL=",       SL_ATR_Factor, "xATR",
+         " | SL=",       SL_ATR_Factor, "xATR (trend) / ",
+                         SL_ATR_Ranging_Mult, "xATR (ranging M1<", M1_Ranging_Threshold, ")",
          " | TS@",       TSstart_ATR_Factor, "xATR",
          " | BrokerGMT=UTC+", detectedOffset, " (auto)");
 
@@ -374,9 +391,14 @@ void TryOpenTrade()
       else           return;
    }
 
-   // ── SL / TP — all in price (no * _Point) ───────────────────────
-   double slDist = g_ATR * SL_ATR_Factor;
-   double tpDist = (TP_ATR_Factor > 0.0) ? g_ATR * TP_ATR_Factor : 0.0;
+   // ── SL / TP — adaptive SL based on M1 trend state ─────────────
+   // When M1 is very choppy (ADX < M1_Ranging_Threshold), widen SL
+   // so normal M1 noise cannot stop-hunt the trade before H1 trend
+   // takes hold. M1 trending → normal SL_ATR_Factor.
+   bool   m1IsRanging = (g_M1ADX < M1_Ranging_Threshold);
+   double slMult      = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
+   double slDist      = g_ATR * slMult;
+   double tpDist      = (TP_ATR_Factor > 0.0) ? g_ATR * TP_ATR_Factor : 0.0;
 
    double sl, tp;
    if(dir == ORDER_TYPE_BUY)
@@ -406,9 +428,12 @@ void TryOpenTrade()
             " | ADX=",     DoubleToString(g_ADX,     1),
             " | +DI=",     DoubleToString(g_PlusDI,  1),
             " | -DI=",     DoubleToString(g_MinusDI, 1),
+            " | M1ADX=",   DoubleToString(g_M1ADX,   1),
+            " | SL=",      DoubleToString(slMult, 1), "xATR",
+                           (m1IsRanging ? " [RANGING]" : " [TREND]"),
+            " | SLdist=",  DoubleToString(slDist, 2),
             " | ATR=",     DoubleToString(g_ATR,  2),
             " | Range=",   DoubleToString(h - l,  2),
-            " | SL±",      DoubleToString(slDist, 2),
             " | TP=",      (tpDist > 0 ? DoubleToString(tpDist, 2) : "OFF"),
             " | SGT=",     TimeToString(GetSGT(), TIME_MINUTES));
    }
@@ -507,7 +532,7 @@ void DrawInfoPanel()
                   : (InSession() ? "OPEN  [OK]" : "CLOSED [waiting]");
 
    string info =
-      "╔══ PROJECT ATR  v2.6  (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.7  (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -531,7 +556,13 @@ void DrawInfoPanel()
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
                        + "  " + atrOk                                        + "\n"
       "  Candle≥   : " + DoubleToString(g_ATR * CandleATR_Factor, 2)         + "\n"
-      "  SL dist   : " + DoubleToString(g_ATR * SL_ATR_Factor,    2)         + "\n"
+      "  M1 ADX    : " + DoubleToString(g_M1ADX, 1)
+                       + (g_M1ADX < M1_Ranging_Threshold
+                          ? "  [RANGING → SL " + DoubleToString(SL_ATR_Ranging_Mult,1) + "×ATR]"
+                          : "  [TREND   → SL " + DoubleToString(SL_ATR_Factor,      1) + "×ATR]") + "\n"
+      "  SL dist   : " + DoubleToString(g_ATR * (g_M1ADX < M1_Ranging_Threshold
+                                                  ? SL_ATR_Ranging_Mult
+                                                  : SL_ATR_Factor), 2)          + "\n"
       "  TP dist   : " + (TP_ATR_Factor > 0
                           ? DoubleToString(g_ATR * TP_ATR_Factor, 2)
                           : "DISABLED (trailing only)")                       + "\n"
@@ -561,7 +592,7 @@ void OnTick()
 {
    g_ATR        = GetATR();
    RefreshADX();                                // fills g_ADX, g_PlusDI, g_MinusDI
-   RefreshM1ADX();                              // fills g_M1ADX, g_M1PlusDI, g_M1MinusDI
+   RefreshM1ADX();                              // fills g_M1ADX/DI bar1 + bar0
    g_IsTrending = (g_ADX >= ADX_Trend_Level);  // true = trend → Momentum
    g_IsNewBar   = IsNewBar();
 
