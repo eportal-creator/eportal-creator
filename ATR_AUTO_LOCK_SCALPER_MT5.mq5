@@ -339,9 +339,13 @@ void TryOpenTrade()
       tp = (tpDist > 0.0) ? NormalizeDouble(price - tpDist, _Digits) : 0.0;
    }
 
+   string tradeComment = "Project ATR | "
+                        + (useMomentum ? "MOM" : "REV")
+                        + (dir == ORDER_TYPE_BUY ? " BUY" : " SELL");
+
    bool ok = (dir == ORDER_TYPE_BUY)
-             ? trade.Buy (LotSize, Symbol(), price, sl, tp, "Project ATR")
-             : trade.Sell(LotSize, Symbol(), price, sl, tp, "Project ATR");
+             ? trade.Buy (LotSize, Symbol(), price, sl, tp, tradeComment)
+             : trade.Sell(LotSize, Symbol(), price, sl, tp, tradeComment);
 
    if(ok)
    {
