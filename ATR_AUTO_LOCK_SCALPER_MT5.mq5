@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.13)                      |
+//|                    PROJECT ATR  (MT5 v2.14)                      |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -58,9 +58,16 @@
 //|      Weak H1 conviction (-DI barely > +DI) = poor REV SELL basis.|
 //|      10 Apr 08:31 REV SELL: H1 gap only 2.14 pts → now blocked.  |
 //|      Surgical: winning REV trades have clear H1 DI bias.          |
+//| 25. M1 DI direction guard replaces ADX-gated guard for REV mode  |
+//|      (v2.14) — root cause of 06:31/08:31/10:04 losses: M1 was    |
+//|      bullish (+DI>-DI) but ADX<25 so v2.11 guard silently passed.|
+//|      ADX lags — rally starts before ADX climbs to 25. DI direction|
+//|      is immediately meaningful at ANY ADX level. Fix: block REV   |
+//|      SELL if M1 +DI>-DI, block REV BUY if M1 -DI>+DI, no ADX    |
+//|      gate. REV only fires when M1 DI agrees with fade direction.  |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.130"
+#property version   "2.140"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -235,7 +242,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.13 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.14 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -478,13 +485,18 @@ void TryOpenTrade()
       else if(c < o) { dir = ORDER_TYPE_BUY;  price = ask; }
       else           return;
 
-      // ── M1 counter-trend guard for REV mode (v2.11) ───────────
-      // REV fades H1 candles but can fire into a strong M1 trend.
-      // Block REV SELL if M1 strongly bullish; block REV BUY if M1
-      // strongly bearish. Same dual-bar logic as MOM guard above.
-      // Prevented: 10 Apr 05:33 REV SELL, M1 ADX=39 +DI>>-DI (-$4.89)
-      if(dir == ORDER_TYPE_SELL && (m1BullBar1 || m1BullBar0)) return;
-      if(dir == ORDER_TYPE_BUY  && (m1BearBar1 || m1BearBar0)) return;
+      // ── M1 DI direction guard for REV mode (v2.14) ────────────
+      // Replaces the v2.11 ADX-gated guard. Root cause of 06:31/08:31/
+      // 10:04 losses: M1 was bullish (+DI>-DI) but ADX<25 so the guard
+      // silently passed. ADX lags — the rally builds before ADX reaches
+      // 25. DI direction is immediately meaningful at ANY ADX level.
+      // Block REV SELL if M1 +DI > -DI (M1 bullish — any strength).
+      // Block REV BUY  if M1 -DI > +DI (M1 bearish — any strength).
+      // REV trades only fire when M1 DI agrees with the fade direction.
+      // Uses bar-1 (completed) DI — stable, no noise from bar-0 needed
+      // now that the ADX gate (the real noise filter) is removed.
+      if(dir == ORDER_TYPE_SELL && g_M1PlusDI  > g_M1MinusDI) return;
+      if(dir == ORDER_TYPE_BUY  && g_M1MinusDI > g_M1PlusDI)  return;
 
       // ── H1 DI direction filter for REV mode (v2.12) ───────────
       // REV SELL only when H1 -DI > +DI (H1 leans bearish).
@@ -683,7 +695,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.13 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.14 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
