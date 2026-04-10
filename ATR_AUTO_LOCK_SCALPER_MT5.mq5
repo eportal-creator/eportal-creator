@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.9)                       |
+//|                    PROJECT ATR  (MT5 v2.10)                      |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -38,9 +38,14 @@
 //|      exhausted — -DI barely > +DI means weak bearish conviction. |
 //|      On 9 Apr: 4/5 losses came from re-entries with converging  |
 //|      DI after a winning trade. Gap < M1_DI_Min_Gap → skip.      |
+//| 20. Raised M1_DI_Min_Gap 3.0 → 5.0 (v2.10) — 10 Apr 04:51      |
+//|      SELL at 4762.26 passed v2.9 with fresh DI flip gap ~3-4 pt  |
+//|      after strong bullish run. 5.0 threshold requires more       |
+//|      established M1 directional conviction before entry.         |
+//| 21. Extended session end 1700 → 2000 SGT (v2.10)                |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.90"
+#property version   "2.100"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -91,7 +96,7 @@ input double M1_DI_Spread_Filter = 8.0;
 // disagrees with trade direction (e.g. +DI=24 vs -DI=14 → spread 10 ≥ 8).
 // Set 0 to disable. Recommended: 8.0.
 
-input double M1_DI_Min_Gap = 3.0;
+input double M1_DI_Min_Gap = 5.0;
 // Block entry if M1 DI gap in the CORRECT direction is too small.
 // For SELL: block if M1 -DI > +DI but (-DI - +DI) < this value.
 // For BUY:  block if M1 +DI > -DI but (+DI - -DI) < this value.
@@ -100,7 +105,10 @@ input double M1_DI_Min_Gap = 3.0;
 // equal means weak directional conviction despite correct direction.
 // Analysis of 9 Apr: 4/5 losses were re-entries within 14 min of a
 // previous win, all with converging M1 DI. Winners had larger gaps.
-// Set 0 to disable. Recommended: 3.0.
+// Raised 3.0 → 5.0 in v2.10: fresh DI flip after strong counter-run
+// typically shows gap 3-4 pt — passes 3.0 but momentum not yet set.
+// 5.0 requires established M1 directional conviction.
+// Set 0 to disable. Recommended: 5.0.
 
 input double TP_ATR_Factor       = 0.0;
 // Take profit = N × ATR (0 = disabled → trailing stop only).
@@ -138,7 +146,7 @@ input double           ADX_Trend_Level = 25.0;
 input group "=== Session Filter (Singapore Time — auto-detected) ==="
 input bool   EnableSessionFilter = true;
 input int    SG_Start            = 6;     // Session open  (SGT hour, 24h)
-input int    SG_End              = 17;    // Session close (SGT hour, 24h)
+input int    SG_End              = 20;    // Session close (SGT hour, 24h)
 // SGT = UTC+8. Broker GMT offset is auto-detected via TimeGMT().
 // No manual offset entry needed — works on any broker.
 
@@ -201,7 +209,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.9 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.10 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -618,7 +626,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.9  (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.10 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
