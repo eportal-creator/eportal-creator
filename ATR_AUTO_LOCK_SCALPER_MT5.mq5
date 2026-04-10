@@ -65,9 +65,17 @@
 //|      is immediately meaningful at ANY ADX level. Fix: block REV   |
 //|      SELL if M1 +DI>-DI, block REV BUY if M1 -DI>+DI, no ADX    |
 //|      gate. REV only fires when M1 DI agrees with fade direction.  |
+//| 26. M1 DI minimum gap for REV mode (v2.15) — v2.14 checks M1 DI  |
+//|      direction but not conviction strength. At 18:25 M1 +DI=20.44 |
+//|      vs -DI=19.90 (gap=0.54) — barely bullish, crossover imminent.|
+//|      Trade fired as REV BUY at 18:26 then price dropped. Fix:     |
+//|      require M1 DI gap >= M1_REV_DI_Min_Gap in fade direction.    |
+//|      REV SELL: M1 -DI must exceed +DI by >= gap (M1 bearish conv) |
+//|      REV BUY:  M1 +DI must exceed -DI by >= gap (M1 bullish conv) |
+//|      18:25 gap=0.54 < 2.0 → blocked. Mirrors H1_REV_DI_Min_Gap.  |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.140"
+#property version   "2.150"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -142,6 +150,17 @@ input double H1_REV_DI_Min_Gap = 3.0;
 // 10 Apr 08:31 REV SELL: H1 gap = 2.14 pts (−DI 16.73 vs +DI 14.59)
 // — below 3.0, so this filter would have blocked the -$2.64 loss.
 // Set 0 to disable. Recommended: 3.0.
+
+input double M1_REV_DI_Min_Gap = 2.0;
+// REV mode only: minimum M1 DI gap required in the fade direction.
+// For REV SELL: M1 -DI must exceed +DI by at least this value.
+// For REV BUY:  M1 +DI must exceed -DI by at least this value.
+// Complements v2.14 direction guard: when DI is correct but the gap is
+// tiny, the crossover just happened and M1 momentum hasn't built yet.
+// 10 Apr 18:26 REV BUY: M1 +DI=20.44 vs -DI=19.90 → gap=0.54 — passes
+// v2.14 direction check but barely; price dropped after entry (-$3.73).
+// Gap of 2.0 would block any near-crossover entry.
+// Set 0 to disable. Recommended: 2.0.
 
 input double TP_ATR_Factor       = 0.0;
 // Take profit = N × ATR (0 = disabled → trailing stop only).
@@ -242,7 +261,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.14 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.15 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -498,6 +517,18 @@ void TryOpenTrade()
       if(dir == ORDER_TYPE_SELL && g_M1PlusDI  > g_M1MinusDI) return;
       if(dir == ORDER_TYPE_BUY  && g_M1MinusDI > g_M1PlusDI)  return;
 
+      // ── M1 DI minimum gap for REV mode (v2.15) ────────────────
+      // Even when M1 DI direction is correct, a tiny gap means the
+      // crossover just happened — conviction hasn't built yet.
+      // 10 Apr 18:26 REV BUY: M1 +DI=20.44 vs -DI=19.90 → gap=0.54
+      // → passed v2.14 direction check but barely; lost -$3.73.
+      // Set M1_REV_DI_Min_Gap=0 to disable.
+      if(M1_REV_DI_Min_Gap > 0.0)
+      {
+         if(dir == ORDER_TYPE_SELL && (g_M1MinusDI - g_M1PlusDI) < M1_REV_DI_Min_Gap) return;
+         if(dir == ORDER_TYPE_BUY  && (g_M1PlusDI  - g_M1MinusDI) < M1_REV_DI_Min_Gap) return;
+      }
+
       // ── H1 DI direction filter for REV mode (v2.12) ───────────
       // REV SELL only when H1 -DI > +DI (H1 leans bearish).
       // REV BUY  only when H1 +DI > -DI (H1 leans bullish).
@@ -557,7 +588,9 @@ void TryOpenTrade()
             " | ADX=",     DoubleToString(g_ADX,     1),
             " | +DI=",     DoubleToString(g_PlusDI,  1),
             " | -DI=",     DoubleToString(g_MinusDI, 1),
-            " | M1ADX=",   DoubleToString(g_M1ADX,   1),
+            " | M1ADX=",   DoubleToString(g_M1ADX,    1),
+            " | M1+DI=",   DoubleToString(g_M1PlusDI, 1),
+            " | M1-DI=",   DoubleToString(g_M1MinusDI,1),
             " | SL=",      DoubleToString(slMult, 1), "xATR",
                            (m1IsRanging ? " [RANGING]" : " [TREND]"),
             " | SLdist=",  DoubleToString(slDist, 2),
@@ -695,7 +728,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.14 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.15 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -728,6 +761,14 @@ void DrawInfoPanel()
                            + (H1_REV_DI_Min_Gap > 0.0
                               ? ("  [gap=" + DoubleToString(MathAbs(g_PlusDI - g_MinusDI), 1)
                                  + (MathAbs(g_PlusDI - g_MinusDI) >= H1_REV_DI_Min_Gap
+                                    ? " OK]" : " WEAK]"))
+                              : "")                                           + "\n"
+      "  M1 REV gap: min=" + (M1_REV_DI_Min_Gap > 0.0
+                              ? DoubleToString(M1_REV_DI_Min_Gap, 1)
+                              : "OFF")
+                           + (M1_REV_DI_Min_Gap > 0.0
+                              ? ("  [gap=" + DoubleToString(MathAbs(g_M1PlusDI - g_M1MinusDI), 1)
+                                 + (MathAbs(g_M1PlusDI - g_M1MinusDI) >= M1_REV_DI_Min_Gap
                                     ? " OK]" : " WEAK]"))
                               : "")                                           + "\n"
       "────────────────────────────────────────\n"
