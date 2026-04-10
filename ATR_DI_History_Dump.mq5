@@ -80,7 +80,7 @@ void OnStart()
       if(h1Shift < 0) h1Shift = 0;
 
       // Read M1 ADX values at this bar
-      double m1Buf[1], m1Pdi[1], m1Mdi[1];
+      double m1Buf[], m1Pdi[], m1Mdi[];
       ArraySetAsSeries(m1Buf, true);
       ArraySetAsSeries(m1Pdi, true);
       ArraySetAsSeries(m1Mdi, true);
@@ -90,7 +90,7 @@ void OnStart()
                    CopyBuffer(h_M1, 2, m1Shift, 1, m1Mdi) >= 1);
 
       // Read H1 ADX values at the H1 bar containing this M1 bar
-      double h1Buf[1], h1Pdi[1], h1Mdi[1];
+      double h1Buf[], h1Pdi[], h1Mdi[];
       ArraySetAsSeries(h1Buf, true);
       ArraySetAsSeries(h1Pdi, true);
       ArraySetAsSeries(h1Mdi, true);
