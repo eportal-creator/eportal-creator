@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.8)                       |
+//|                    PROJECT ATR  (MT5 v2.9)                       |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -32,9 +32,15 @@
 //|      -DI by >= M1_DI_Spread_Filter regardless of M1 ADX level.  |
 //|      Catches clear M1 bullish bias the ADX-gated guard misses.  |
 //|      Surgical: blocks late bounce entries, keeps early wins.     |
+//| 19. M1 DI convergence filter (v2.9) — block entry if M1 DI gap  |
+//|      is too small even in the correct direction. Catches "re-    |
+//|      entry after win" where price bounced and M1 momentum        |
+//|      exhausted — -DI barely > +DI means weak bearish conviction. |
+//|      On 9 Apr: 4/5 losses came from re-entries with converging  |
+//|      DI after a winning trade. Gap < M1_DI_Min_Gap → skip.      |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.80"
+#property version   "2.90"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -84,6 +90,17 @@ input double M1_DI_Spread_Filter = 8.0;
 // misses when M1 ADX < 25. Surgical — only blocks when M1 DI strongly
 // disagrees with trade direction (e.g. +DI=24 vs -DI=14 → spread 10 ≥ 8).
 // Set 0 to disable. Recommended: 8.0.
+
+input double M1_DI_Min_Gap = 3.0;
+// Block entry if M1 DI gap in the CORRECT direction is too small.
+// For SELL: block if M1 -DI > +DI but (-DI - +DI) < this value.
+// For BUY:  block if M1 +DI > -DI but (+DI - -DI) < this value.
+// Catches "re-entry after win" trades where price bounced and M1
+// bearish/bullish momentum has exhausted — DI lines converging near
+// equal means weak directional conviction despite correct direction.
+// Analysis of 9 Apr: 4/5 losses were re-entries within 14 min of a
+// previous win, all with converging M1 DI. Winners had larger gaps.
+// Set 0 to disable. Recommended: 3.0.
 
 input double TP_ATR_Factor       = 0.0;
 // Take profit = N × ATR (0 = disabled → trailing stop only).
@@ -184,7 +201,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.8 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.9 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -405,6 +422,18 @@ void TryOpenTrade()
          if(dir == ORDER_TYPE_SELL && (g_M1PlusDI  - g_M1MinusDI) >= M1_DI_Spread_Filter) return;
          if(dir == ORDER_TYPE_BUY  && (g_M1MinusDI - g_M1PlusDI)  >= M1_DI_Spread_Filter) return;
       }
+
+      // ── M1 DI convergence filter (v2.9) ───────────────────────
+      // Block if M1 DI gap in the correct direction is too small.
+      // "Correct direction" means -DI > +DI for SELL, +DI > -DI for BUY.
+      // A tiny gap = exhausted momentum, likely a bounce/re-entry trap.
+      // 9 Apr analysis: 4/5 losses were re-entries with converging DI.
+      // Set M1_DI_Min_Gap=0 to disable.
+      if(M1_DI_Min_Gap > 0.0)
+      {
+         if(dir == ORDER_TYPE_SELL && (g_M1MinusDI - g_M1PlusDI) < M1_DI_Min_Gap) return;
+         if(dir == ORDER_TYPE_BUY  && (g_M1PlusDI  - g_M1MinusDI) < M1_DI_Min_Gap) return;
+      }
    }
    else
    {
@@ -554,7 +583,7 @@ void DrawInfoPanel()
    string sessStr = !EnableSessionFilter ? "DISABLED"
                   : (InSession() ? "OPEN  [OK]" : "CLOSED [waiting]");
 
-   // M1 DI spread for panel display
+   // M1 DI spread for panel display (v2.8 filter — wrong direction)
    double m1DiSpread   = g_M1PlusDI - g_M1MinusDI;   // positive = bull, negative = bear
    string spreadSign   = (m1DiSpread >= 0) ? "+" : "";
    string spreadBlock  = "";
@@ -570,8 +599,26 @@ void DrawInfoPanel()
    else
       spreadBlock = "  [DISABLED]";
 
+   // M1 DI convergence for panel display (v2.9 filter — exhausted momentum)
+   string convBlock = "";
+   if(M1_DI_Min_Gap > 0.0)
+   {
+      double sellGap = g_M1MinusDI - g_M1PlusDI;   // positive = M1 bearish
+      double buyGap  = g_M1PlusDI  - g_M1MinusDI;  // positive = M1 bullish
+      if(sellGap < M1_DI_Min_Gap && sellGap >= 0)
+         convBlock = "  [SELL WEAK gap=" + DoubleToString(sellGap, 1) + "<" + DoubleToString(M1_DI_Min_Gap,1) + "]";
+      else if(buyGap < M1_DI_Min_Gap && buyGap >= 0)
+         convBlock = "  [BUY  WEAK gap=" + DoubleToString(buyGap,  1) + "<" + DoubleToString(M1_DI_Min_Gap,1) + "]";
+      else if(sellGap >= M1_DI_Min_Gap)
+         convBlock = "  [SELL OK  gap=" + DoubleToString(sellGap, 1) + "]";
+      else
+         convBlock = "  [BUY  OK  gap=" + DoubleToString(buyGap,  1) + "]";
+   }
+   else
+      convBlock = "  [DISABLED]";
+
    string info =
-      "╔══ PROJECT ATR  v2.8  (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.9  (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -594,6 +641,10 @@ void DrawInfoPanel()
                               ? DoubleToString(M1_DI_Spread_Filter, 1)
                               : "OFF")
                            + spreadBlock                                      + "\n"
+      "  DI conv   : min=" + (M1_DI_Min_Gap > 0.0
+                              ? DoubleToString(M1_DI_Min_Gap, 1)
+                              : "OFF")
+                           + convBlock                                        + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
