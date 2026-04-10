@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.12)                      |
+//|                    PROJECT ATR  (MT5 v2.13)                      |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -52,9 +52,15 @@
 //|      +DI > -DI (H1 leans bullish). REV SELLs into bullish H1     |
 //|      recovery caused -$2.88, -$2.34, -$1.63 on 10 Apr. Filter   |
 //|      blocks all 3 losses (+$6.85 saved, -$0.56 missed win).      |
+//| 24. H1 DI minimum gap for REV mode (v2.13) — REV direction must  |
+//|      exceed opposite DI by >= H1_REV_DI_Min_Gap (default 3.0).   |
+//|      Mirrors MOM convergence filter but applied to H1 DI for REV.|
+//|      Weak H1 conviction (-DI barely > +DI) = poor REV SELL basis.|
+//|      10 Apr 08:31 REV SELL: H1 gap only 2.14 pts → now blocked.  |
+//|      Surgical: winning REV trades have clear H1 DI bias.          |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.120"
+#property version   "2.130"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -118,6 +124,17 @@ input double M1_DI_Min_Gap = 5.0;
 // typically shows gap 3-4 pt — passes 3.0 but momentum not yet set.
 // 5.0 requires established M1 directional conviction.
 // Set 0 to disable. Recommended: 5.0.
+
+input double H1_REV_DI_Min_Gap = 3.0;
+// REV mode only: minimum H1 DI gap required in the trade direction.
+// For REV SELL: H1 -DI must exceed +DI by at least this value.
+// For REV BUY:  H1 +DI must exceed -DI by at least this value.
+// Mirrors the MOM convergence filter (M1_DI_Min_Gap) but applied to H1.
+// A narrow H1 DI gap means weak H1 directional conviction — fading a
+// candle when H1 barely leans one way risks a whipsaw reversal.
+// 10 Apr 08:31 REV SELL: H1 gap = 2.14 pts (−DI 16.73 vs +DI 14.59)
+// — below 3.0, so this filter would have blocked the -$2.64 loss.
+// Set 0 to disable. Recommended: 3.0.
 
 input double TP_ATR_Factor       = 0.0;
 // Take profit = N × ATR (0 = disabled → trailing stop only).
@@ -218,7 +235,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.12 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.13 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -478,6 +495,17 @@ void TryOpenTrade()
       // recovery — this filter blocks all 3 (saves ~$6.85 in losses).
       if(dir == ORDER_TYPE_SELL && g_PlusDI  >= g_MinusDI) return;
       if(dir == ORDER_TYPE_BUY  && g_MinusDI >= g_PlusDI)  return;
+
+      // ── H1 DI minimum gap for REV mode (v2.13) ────────────────
+      // Even when H1 DI leans the right way, a narrow gap means weak
+      // conviction. Require H1 DI lead >= H1_REV_DI_Min_Gap.
+      // Analogous to M1_DI_Min_Gap in MOM mode.
+      // 10 Apr 08:31 REV SELL: H1 gap=2.14 < 3.0 → blocked (-$2.64).
+      if(H1_REV_DI_Min_Gap > 0.0)
+      {
+         if(dir == ORDER_TYPE_SELL && (g_MinusDI - g_PlusDI) < H1_REV_DI_Min_Gap) return;
+         if(dir == ORDER_TYPE_BUY  && (g_PlusDI  - g_MinusDI) < H1_REV_DI_Min_Gap) return;
+      }
    }
 
    // ── SL / TP — adaptive SL based on M1 trend state ─────────────
@@ -655,7 +683,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.12 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.13 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -682,6 +710,14 @@ void DrawInfoPanel()
                               ? DoubleToString(M1_DI_Min_Gap, 1)
                               : "OFF")
                            + convBlock                                        + "\n"
+      "  H1 REV gap: min=" + (H1_REV_DI_Min_Gap > 0.0
+                              ? DoubleToString(H1_REV_DI_Min_Gap, 1)
+                              : "OFF")
+                           + (H1_REV_DI_Min_Gap > 0.0
+                              ? ("  [gap=" + DoubleToString(MathAbs(g_PlusDI - g_MinusDI), 1)
+                                 + (MathAbs(g_PlusDI - g_MinusDI) >= H1_REV_DI_Min_Gap
+                                    ? " OK]" : " WEAK]"))
+                              : "")                                           + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
