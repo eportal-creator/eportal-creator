@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.10)                      |
+//|                    PROJECT ATR  (MT5 v2.11)                      |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -43,9 +43,13 @@
 //|      after strong bullish run. 5.0 threshold requires more       |
 //|      established M1 directional conviction before entry.         |
 //| 21. Extended session end 1700 → 2000 SGT (v2.10)                |
+//| 22. M1 dual-bar guard extended to REV mode (v2.11) — REV had     |
+//|      zero M1 filters; REV SELL into strong M1 bull trend caused  |
+//|      -$4.89 on 10 Apr 05:33. Guard now blocks REV trades that    |
+//|      conflict with strong M1 momentum, same as MOM mode.         |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.100"
+#property version   "2.110"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -209,7 +213,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.10 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.11 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -396,6 +400,15 @@ void TryOpenTrade()
    ENUM_ORDER_TYPE dir;
    double          price;
 
+   // ── M1 dual-bar guard flags — pre-computed, shared by MOM & REV ─
+   // Requires M1 ADX >= ADX_Trend_Level so random noise is filtered.
+   // Bar 1 = last completed M1 bar. Bar 0 = current forming bar.
+   // Extended to REV mode in v2.11 (was MOM-only since v2.6).
+   bool m1BullBar1 = (g_M1ADX >= ADX_Trend_Level && g_M1PlusDI  > g_M1MinusDI);
+   bool m1BullBar0 = (g_M1ADX >= ADX_Trend_Level && g_M1PlusDI0 > g_M1MinusDI0);
+   bool m1BearBar1 = (g_M1ADX >= ADX_Trend_Level && g_M1MinusDI  > g_M1PlusDI);
+   bool m1BearBar0 = (g_M1ADX >= ADX_Trend_Level && g_M1MinusDI0 > g_M1PlusDI0);
+
    if(useMomentum)
    {
       // MOMENTUM: trade candle direction AND H1 DI must agree
@@ -407,15 +420,8 @@ void TryOpenTrade()
       else return;  // candle and H1 DI direction disagree — skip
 
       // ── M1 counter-trend guard — dual-bar (v2.6) ──────────────
-      // Block if EITHER the last completed bar (shift 1) OR the current
-      // forming bar (shift 0) shows M1 trending against the trade.
-      // Bar 0 DI catches fast-starting rallies that lag in bar-1 values.
-      // Both bars require M1 ADX >= threshold so random noise is filtered.
-      bool m1BullBar1 = (g_M1ADX >= ADX_Trend_Level && g_M1PlusDI  > g_M1MinusDI);
-      bool m1BullBar0 = (g_M1ADX >= ADX_Trend_Level && g_M1PlusDI0 > g_M1MinusDI0);
-      bool m1BearBar1 = (g_M1ADX >= ADX_Trend_Level && g_M1MinusDI  > g_M1PlusDI);
-      bool m1BearBar0 = (g_M1ADX >= ADX_Trend_Level && g_M1MinusDI0 > g_M1PlusDI0);
-
+      // Block if EITHER bar 1 OR bar 0 shows M1 trending against trade.
+      // Bar 0 catches fast-starting rallies that lag in bar-1 DI values.
       if(dir == ORDER_TYPE_SELL && (m1BullBar1 || m1BullBar0)) return;
       if(dir == ORDER_TYPE_BUY  && (m1BearBar1 || m1BearBar0)) return;
 
@@ -431,7 +437,7 @@ void TryOpenTrade()
          if(dir == ORDER_TYPE_BUY  && (g_M1MinusDI - g_M1PlusDI)  >= M1_DI_Spread_Filter) return;
       }
 
-      // ── M1 DI convergence filter (v2.9) ───────────────────────
+      // ── M1 DI convergence filter (v2.9 / v2.10) ───────────────
       // Block if M1 DI gap in the correct direction is too small.
       // "Correct direction" means -DI > +DI for SELL, +DI > -DI for BUY.
       // A tiny gap = exhausted momentum, likely a bounce/re-entry trap.
@@ -445,10 +451,18 @@ void TryOpenTrade()
    }
    else
    {
-      // REVERSAL: fade the completed candle
+      // REVERSAL: fade the completed candle (H1 ADX < ADX_Trend_Level)
       if     (c > o) { dir = ORDER_TYPE_SELL; price = bid; }
       else if(c < o) { dir = ORDER_TYPE_BUY;  price = ask; }
       else           return;
+
+      // ── M1 counter-trend guard for REV mode (v2.11) ───────────
+      // REV fades H1 candles but can fire into a strong M1 trend.
+      // Block REV SELL if M1 strongly bullish; block REV BUY if M1
+      // strongly bearish. Same dual-bar logic as MOM guard above.
+      // Prevented: 10 Apr 05:33 REV SELL, M1 ADX=39 +DI>>-DI (-$4.89)
+      if(dir == ORDER_TYPE_SELL && (m1BullBar1 || m1BullBar0)) return;
+      if(dir == ORDER_TYPE_BUY  && (m1BearBar1 || m1BearBar0)) return;
    }
 
    // ── SL / TP — adaptive SL based on M1 trend state ─────────────
@@ -626,7 +640,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.10 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.11 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
