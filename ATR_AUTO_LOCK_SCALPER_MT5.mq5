@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.11)                      |
+//|                    PROJECT ATR  (MT5 v2.12)                      |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -47,9 +47,14 @@
 //|      zero M1 filters; REV SELL into strong M1 bull trend caused  |
 //|      -$4.89 on 10 Apr 05:33. Guard now blocks REV trades that    |
 //|      conflict with strong M1 momentum, same as MOM mode.         |
+//| 23. H1 DI direction filter for REV mode (v2.12) — REV SELL only  |
+//|      when H1 -DI > +DI (H1 leans bearish); REV BUY only when H1  |
+//|      +DI > -DI (H1 leans bullish). REV SELLs into bullish H1     |
+//|      recovery caused -$2.88, -$2.34, -$1.63 on 10 Apr. Filter   |
+//|      blocks all 3 losses (+$6.85 saved, -$0.56 missed win).      |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.110"
+#property version   "2.120"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -213,7 +218,7 @@ int OnInit()
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
 
-   Print("Project ATR MT5 v2.11 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.12 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -463,6 +468,16 @@ void TryOpenTrade()
       // Prevented: 10 Apr 05:33 REV SELL, M1 ADX=39 +DI>>-DI (-$4.89)
       if(dir == ORDER_TYPE_SELL && (m1BullBar1 || m1BullBar0)) return;
       if(dir == ORDER_TYPE_BUY  && (m1BearBar1 || m1BearBar0)) return;
+
+      // ── H1 DI direction filter for REV mode (v2.12) ───────────
+      // REV SELL only when H1 -DI > +DI (H1 leans bearish).
+      // REV BUY  only when H1 +DI > -DI (H1 leans bullish).
+      // When H1 is in bullish recovery, REV SELLs into green candles
+      // lose; when bearish, REV BUYs into red candles lose.
+      // 10 Apr: REV SELLs 06:01/06:31/07:14 fired into bullish H1
+      // recovery — this filter blocks all 3 (saves ~$6.85 in losses).
+      if(dir == ORDER_TYPE_SELL && g_PlusDI  >= g_MinusDI) return;
+      if(dir == ORDER_TYPE_BUY  && g_MinusDI >= g_PlusDI)  return;
    }
 
    // ── SL / TP — adaptive SL based on M1 trend state ─────────────
@@ -640,7 +655,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.11 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.12 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
