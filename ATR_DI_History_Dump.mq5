@@ -74,7 +74,7 @@ void OnStart()
       // Shift from current bar (bar 0) — pos 0 = current forming bar
       // shift = iBarShift equivalent: how many bars ago is barTime?
       int m1Shift = Bars(Symbol(), PERIOD_M1, barTime, TimeCurrent()) - 1;
-      int h1Shift = Bars(Symbol(), PERIOD_H1, barTime, TimeCurrent()) - 1;
+      int h1Shift = Bars(Symbol(), PERIOD_H1, barTime, TimeCurrent());
 
       if(m1Shift < 0) m1Shift = 0;
       if(h1Shift < 0) h1Shift = 0;

@@ -73,9 +73,20 @@
 //|      REV SELL: M1 -DI must exceed +DI by >= gap (M1 bearish conv) |
 //|      REV BUY:  M1 +DI must exceed -DI by >= gap (M1 bullish conv) |
 //|      18:25 gap=0.54 < 2.0 → blocked. Mirrors H1_REV_DI_Min_Gap.  |
+//| 27. M1 ADX minimum + DI max gap for REV mode (v2.16) — two new    |
+//|      quality filters for REV entries, identified from 3 REV BUYs: |
+//|      A) M1_REV_ADX_Min (default 22): if M1 ADX too low, DI lines  |
+//|         oscillate randomly — not a reliable directional signal.    |
+//|         13 Apr 05:33 REV BUY: M1 ADX=18 → DI flip every 1-2 bars  |
+//|         → loss. ADX<22 means M1 is choppy; DI is noise.           |
+//|      B) M1_REV_DI_Max_Gap (default 25): if M1 DI gap is extreme,  |
+//|         the strong trend is near exhaustion and about to reverse.   |
+//|         13 Apr 10:04 REV BUY: M1 gap=36 (peak) → reversed → loss. |
+//|         13 Apr 06:37 REV BUY: M1 ADX=34, gap=5.53 → won ✓        |
+//|         Sweet spot: M1 trending (ADX≥22) but not extreme (gap≤25) |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.150"
+#property version   "2.160"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -161,6 +172,23 @@ input double M1_REV_DI_Min_Gap = 2.0;
 // v2.14 direction check but barely; price dropped after entry (-$3.73).
 // Gap of 2.0 would block any near-crossover entry.
 // Set 0 to disable. Recommended: 2.0.
+
+input double M1_REV_ADX_Min = 22.0;
+// REV mode only: minimum M1 ADX required before entry.
+// When M1 ADX is too low (near ranging), the DI lines oscillate randomly
+// — any "direction" shown is noise, not real conviction.
+// 13 Apr 05:33 REV BUY: M1 ADX=18.02 → DI flipped every 1-2 bars → loss.
+// 13 Apr 06:37 REV BUY: M1 ADX=34.20 → stable DI → won.
+// Set 0 to disable. Recommended: 22.0.
+
+input double M1_REV_DI_Max_Gap = 25.0;
+// REV mode only: maximum M1 DI gap allowed in the fade direction.
+// When M1 gap is extreme (+DI far above -DI), the strong trend is likely
+// near peak/exhaustion — fading a pullback at peak momentum risks a sharp
+// reversal against the trade as momentum collapses.
+// 13 Apr 10:04 REV BUY: M1 gap=36.02 (peak) → reversed immediately → loss.
+// 13 Apr 06:37 REV BUY: M1 gap=5.53 (moderate) → won cleanly.
+// Set 0 to disable. Recommended: 25.0.
 
 input double TP_ATR_Factor       = 0.0;
 // Take profit = N × ATR (0 = disabled → trailing stop only).
@@ -260,15 +288,18 @@ int OnInit()
    TodayDate = DayOfTime(TimeCurrent());
 
    int detectedOffset = (int)((TimeCurrent() - TimeGMT()) / 3600);
+   string gmtStr = (detectedOffset >= 0)
+                   ? "UTC+" + IntegerToString(detectedOffset)
+                   : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.15 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.16 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
          " | SL=",       SL_ATR_Factor, "xATR (trend) / ",
                          SL_ATR_Ranging_Mult, "xATR (ranging M1<", M1_Ranging_Threshold, ")",
          " | TS@",       TSstart_ATR_Factor, "xATR",
-         " | BrokerGMT=UTC+", detectedOffset, " (auto)");
+         " | BrokerGMT=", gmtStr, " (auto)");
 
    return INIT_SUCCEEDED;
 }
@@ -504,6 +535,12 @@ void TryOpenTrade()
       else if(c < o) { dir = ORDER_TYPE_BUY;  price = ask; }
       else           return;
 
+      // ── M1 ADX minimum for REV mode (v2.16a) ─────────────────
+      // Low M1 ADX = DI lines oscillate randomly = noise, not signal.
+      // 13 Apr 05:33 REV BUY: M1 ADX=18 → DI flipped every 1-2 bars → loss.
+      // Must check ADX quality BEFORE acting on DI direction.
+      if(M1_REV_ADX_Min > 0.0 && g_M1ADX < M1_REV_ADX_Min) return;
+
       // ── M1 DI direction guard for REV mode (v2.14) ────────────
       // Replaces the v2.11 ADX-gated guard. Root cause of 06:31/08:31/
       // 10:04 losses: M1 was bullish (+DI>-DI) but ADX<25 so the guard
@@ -527,6 +564,16 @@ void TryOpenTrade()
       {
          if(dir == ORDER_TYPE_SELL && (g_M1MinusDI - g_M1PlusDI) < M1_REV_DI_Min_Gap) return;
          if(dir == ORDER_TYPE_BUY  && (g_M1PlusDI  - g_M1MinusDI) < M1_REV_DI_Min_Gap) return;
+      }
+
+      // ── M1 DI max gap for REV mode (v2.16b) ──────────────────
+      // Extreme M1 gap = momentum at peak, likely near exhaustion.
+      // 13 Apr 10:04 REV BUY: M1 gap=36.02 → reversed immediately → loss.
+      // 13 Apr 06:37 REV BUY: M1 gap=5.53 (moderate) → won cleanly.
+      if(M1_REV_DI_Max_Gap > 0.0)
+      {
+         if(dir == ORDER_TYPE_SELL && (g_M1MinusDI - g_M1PlusDI) > M1_REV_DI_Max_Gap) return;
+         if(dir == ORDER_TYPE_BUY  && (g_M1PlusDI  - g_M1MinusDI) > M1_REV_DI_Max_Gap) return;
       }
 
       // ── H1 DI direction filter for REV mode (v2.12) ───────────
@@ -728,7 +775,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.15 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.16 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -770,6 +817,22 @@ void DrawInfoPanel()
                               ? ("  [gap=" + DoubleToString(MathAbs(g_M1PlusDI - g_M1MinusDI), 1)
                                  + (MathAbs(g_M1PlusDI - g_M1MinusDI) >= M1_REV_DI_Min_Gap
                                     ? " OK]" : " WEAK]"))
+                              : "")                                           + "\n"
+      "  M1 REV ADX: min=" + (M1_REV_ADX_Min > 0.0
+                              ? DoubleToString(M1_REV_ADX_Min, 1)
+                              : "OFF")
+                           + (M1_REV_ADX_Min > 0.0
+                              ? ("  [ADX=" + DoubleToString(g_M1ADX, 1)
+                                 + (g_M1ADX >= M1_REV_ADX_Min
+                                    ? " OK]" : " LOW]"))
+                              : "")                                           + "\n"
+      "  M1 REV Xgap: max=" + (M1_REV_DI_Max_Gap > 0.0
+                              ? DoubleToString(M1_REV_DI_Max_Gap, 1)
+                              : "OFF")
+                           + (M1_REV_DI_Max_Gap > 0.0
+                              ? ("  [gap=" + DoubleToString(MathAbs(g_M1PlusDI - g_M1MinusDI), 1)
+                                 + (MathAbs(g_M1PlusDI - g_M1MinusDI) <= M1_REV_DI_Max_Gap
+                                    ? " OK]" : " PEAK]"))
                               : "")                                           + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
