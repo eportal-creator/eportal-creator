@@ -84,9 +84,16 @@
 //|         13 Apr 10:04 REV BUY: M1 gap=36 (peak) → reversed → loss. |
 //|         13 Apr 06:37 REV BUY: M1 ADX=34, gap=5.53 → won ✓        |
 //|         Sweet spot: M1 trending (ADX≥22) but not extreme (gap≤25) |
+//| 28. MOM counter-trend guard ADX gate removed (v2.17) — guard used  |
+//|      g_M1ADX >= ADX_Trend_Level (25) before checking DI direction. |
+//|      14 Apr 07:27 and 07:49 MOM BUY losses: M1 -DI already > +DI  |
+//|      (bearish) but M1 ADX < 25 so guard silently passed. Same root |
+//|      cause as v2.14 (REV mode). Fix: check M1 DI direction at ANY  |
+//|      ADX level — no gate. Verified: all 5 Apr 14 winning signal    |
+//|      bars had M1 +DI > -DI; zero winners blocked by this change.   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.160"
+#property version   "2.170"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -292,7 +299,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.16 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.17 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -479,14 +486,18 @@ void TryOpenTrade()
    ENUM_ORDER_TYPE dir;
    double          price;
 
-   // ── M1 dual-bar guard flags — pre-computed, shared by MOM & REV ─
-   // Requires M1 ADX >= ADX_Trend_Level so random noise is filtered.
+   // ── M1 dual-bar guard flags — pre-computed, used by MOM mode ─────
+   // v2.17: ADX gate removed — DI direction is meaningful at ANY ADX.
+   // Previously required M1 ADX >= ADX_Trend_Level (25), which let
+   // 07:27 and 07:49 Apr 14 MOM BUY losses through when M1 ADX was
+   // below 25 but -DI was already clearly > +DI (M1 bearish).
+   // Mirrors the v2.14 fix applied to REV mode.
+   // Verified safe: all 5 Apr 14 winning signal bars had +DI > -DI.
    // Bar 1 = last completed M1 bar. Bar 0 = current forming bar.
-   // Extended to REV mode in v2.11 (was MOM-only since v2.6).
-   bool m1BullBar1 = (g_M1ADX >= ADX_Trend_Level && g_M1PlusDI  > g_M1MinusDI);
-   bool m1BullBar0 = (g_M1ADX >= ADX_Trend_Level && g_M1PlusDI0 > g_M1MinusDI0);
-   bool m1BearBar1 = (g_M1ADX >= ADX_Trend_Level && g_M1MinusDI  > g_M1PlusDI);
-   bool m1BearBar0 = (g_M1ADX >= ADX_Trend_Level && g_M1MinusDI0 > g_M1PlusDI0);
+   bool m1BullBar1 = (g_M1PlusDI  > g_M1MinusDI);
+   bool m1BullBar0 = (g_M1PlusDI0 > g_M1MinusDI0);
+   bool m1BearBar1 = (g_M1MinusDI  > g_M1PlusDI);
+   bool m1BearBar0 = (g_M1MinusDI0 > g_M1PlusDI0);
 
    if(useMomentum)
    {
@@ -775,7 +786,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.16 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.17 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
