@@ -91,9 +91,18 @@
 //|      cause as v2.14 (REV mode). Fix: check M1 DI direction at ANY  |
 //|      ADX level — no gate. Verified: all 5 Apr 14 winning signal    |
 //|      bars had M1 +DI > -DI; zero winners blocked by this change.   |
+//| 29. M1_Ranging_Threshold raised 15 → 25 (v2.18) — threshold of 15  |
+//|      only widened SL when M1 was very choppy (ADX<15). Evidence:    |
+//|      14 Apr 11:07 (ADX=20.86) and 11:12 (ADX=21.83) MOM BUY losses |
+//|      used 1.5×ATR SL and were stopped by M1 pullback within strong  |
+//|      H1 trend; price reversed up immediately after. With 2.0×ATR:   |
+//|      11:07 SL=4777.74 vs low=4778.65 → survives; 11:12 SL=4775.66  |
+//|      vs low=4776.53 → survives. Conceptually cleaner: M1 ADX < 25  |
+//|      (unconfirmed trend) → wider SL; M1 ADX ≥ 25 (confirmed) →     |
+//|      normal SL. Threshold now aligned with ADX_Trend_Level.         |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.170"
+#property version   "2.180"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -131,10 +140,14 @@ input double SL_ATR_Ranging_Mult = 2.0;
 // direction is correct. Wider SL survives the chop until H1 takes hold.
 // e.g. 2.0 × $2.90 ATR = $5.80 SL per 0.01 lot.
 
-input double M1_Ranging_Threshold = 15.0;
-// M1 ADX below this = very choppy → use SL_ATR_Ranging_Mult (wider).
-// M1 ADX above this = trending   → use SL_ATR_Factor (normal).
-// Recommended: 15 (very choppy). Raise to 20 to widen more often.
+input double M1_Ranging_Threshold = 25.0;
+// M1 ADX below this → use SL_ATR_Ranging_Mult (wider SL).
+// M1 ADX above this → use SL_ATR_Factor (normal SL).
+// Raised 15 → 25 in v2.18: M1 ADX 15–24 (building momentum, not yet
+// confirmed trend) still sees deep pullbacks within strong H1 trends.
+// 14 Apr 11:07 (ADX=20.86) and 11:12 (ADX=21.83): 1.5×ATR SL stopped
+// out; 2.0×ATR would have survived both. Now aligned with ADX_Trend_Level:
+// M1 ADX < 25 = unconfirmed → wider; M1 ADX ≥ 25 = trending → normal.
 
 input double M1_DI_Spread_Filter = 8.0;
 // Block SELL if M1 +DI exceeds -DI by >= this value (any M1 ADX level).
@@ -299,7 +312,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.17 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.18 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -786,7 +799,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.17 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.18 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
