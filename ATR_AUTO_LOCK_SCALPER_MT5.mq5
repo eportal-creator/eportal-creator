@@ -100,9 +100,19 @@
 //|      vs low=4776.53 → survives. Conceptually cleaner: M1 ADX < 25  |
 //|      (unconfirmed trend) → wider SL; M1 ADX ≥ 25 (confirmed) →     |
 //|      normal SL. Threshold now aligned with ADX_Trend_Level.         |
+//| 30. H1 DI minimum gap for MOM mode (v2.19) — MOM had no minimum H1  |
+//|      DI gap requirement. REV got this in v2.13; MOM was missed.     |
+//|      14 Apr 12:57 MOM BUY: H1 +DI=15.73 vs -DI=14.62 (gap=1.11)   |
+//|      → loss -$4.19. 13:20 MOM BUY: H1 +DI=13.63 vs -DI=12.67      |
+//|      (gap=0.96) → loss -$4.23. H1 technically bullish but DI lines  |
+//|      near-equal = trend nearly exhausted. Both losses hit the wide   |
+//|      2×ATR SL (v2.18) confirming it is a direction quality problem, |
+//|      not an SL width problem. Fix: require H1 DI gap ≥ 3.0 for MOM.|
+//|      gap=1.11 < 3.0 → blocked; gap=0.96 < 3.0 → blocked. Early-   |
+//|      morning winners (03:xx–05:xx) had H1 gaps > 10 → unaffected.  |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.180"
+#property version   "2.190"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -170,6 +180,17 @@ input double M1_DI_Min_Gap = 5.0;
 // typically shows gap 3-4 pt — passes 3.0 but momentum not yet set.
 // 5.0 requires established M1 directional conviction.
 // Set 0 to disable. Recommended: 5.0.
+
+input double H1_MOM_DI_Min_Gap = 3.0;
+// MOM mode only: minimum H1 DI gap required in the trade direction.
+// For MOM BUY:  H1 +DI must exceed -DI by at least this value.
+// For MOM SELL: H1 -DI must exceed +DI by at least this value.
+// When H1 DI lines are nearly equal the H1 trend is near exhaustion
+// — entering MOM direction chases a fading move with little cushion.
+// 14 Apr 12:57 MOM BUY: H1 gap=1.11 pts → loss -$4.19.
+// 14 Apr 13:20 MOM BUY: H1 gap=0.96 pts → loss -$4.23.
+// Both blocked by 3.0 threshold. Mirrors H1_REV_DI_Min_Gap (v2.13).
+// Set 0 to disable. Recommended: 3.0.
 
 input double H1_REV_DI_Min_Gap = 3.0;
 // REV mode only: minimum H1 DI gap required in the trade direction.
@@ -312,7 +333,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.18 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.19 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -521,6 +542,18 @@ void TryOpenTrade()
       if     (c > o && g_PlusDI  > g_MinusDI) { dir = ORDER_TYPE_BUY;  price = ask; }
       else if(c < o && g_MinusDI > g_PlusDI)  { dir = ORDER_TYPE_SELL; price = bid; }
       else return;  // candle and H1 DI direction disagree — skip
+
+      // ── H1 DI minimum gap for MOM mode (v2.19) ────────────────
+      // When H1 DI lines are nearly equal the H1 trend is near exhaustion
+      // — MOM entry chases a fading move. Require meaningful H1 DI lead.
+      // 14 Apr 12:57 BUY: H1 gap=1.11; 13:20 BUY: H1 gap=0.96 → losses.
+      // Mirrors H1_REV_DI_Min_Gap (v2.13) now applied to MOM mode.
+      // Set H1_MOM_DI_Min_Gap=0 to disable.
+      if(H1_MOM_DI_Min_Gap > 0.0)
+      {
+         if(dir == ORDER_TYPE_BUY  && (g_PlusDI  - g_MinusDI) < H1_MOM_DI_Min_Gap) return;
+         if(dir == ORDER_TYPE_SELL && (g_MinusDI - g_PlusDI)  < H1_MOM_DI_Min_Gap) return;
+      }
 
       // ── M1 counter-trend guard — dual-bar (v2.6) ──────────────
       // Block if EITHER bar 1 OR bar 0 shows M1 trending against trade.
@@ -799,7 +832,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.18 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.19 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -826,6 +859,14 @@ void DrawInfoPanel()
                               ? DoubleToString(M1_DI_Min_Gap, 1)
                               : "OFF")
                            + convBlock                                        + "\n"
+      "  H1 MOM gap: min=" + (H1_MOM_DI_Min_Gap > 0.0
+                              ? DoubleToString(H1_MOM_DI_Min_Gap, 1)
+                              : "OFF")
+                           + (H1_MOM_DI_Min_Gap > 0.0
+                              ? ("  [gap=" + DoubleToString(MathAbs(g_PlusDI - g_MinusDI), 1)
+                                 + (MathAbs(g_PlusDI - g_MinusDI) >= H1_MOM_DI_Min_Gap
+                                    ? " OK]" : " WEAK]"))
+                              : "")                                           + "\n"
       "  H1 REV gap: min=" + (H1_REV_DI_Min_Gap > 0.0
                               ? DoubleToString(H1_REV_DI_Min_Gap, 1)
                               : "OFF")
