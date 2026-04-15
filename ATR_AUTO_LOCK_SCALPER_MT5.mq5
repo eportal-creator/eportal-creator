@@ -130,9 +130,21 @@
 //|        → both pass unaffected ✓. H4 filter ruled out (H4 was BULL  |
 //|        throughout). Slope check is minimal overhead: one extra       |
 //|        CopyBuffer(shift=2) on the existing ADX handle.              |
+//| 33. H4 direction alignment for MOM mode (v2.22) — MOM trade that  |
+//|      opposes the H4 trend is counter-trend on the next TF up.     |
+//|      H1 bearish while H4 still bullish = H1 correcting inside     |
+//|      H4 uptrend → MOM SELL here is a counter-trend trade, not a   |
+//|      genuine downtrend signal. High risk of SL hit on H4 bounce.  |
+//|      15 Apr 11:11 MOM SELL: H4 +DI=29.70 > -DI=12.48 (H4 BULL)  |
+//|      → sold into H4 uptrend correction → SL hit → -$3.85.        |
+//|      Fix: MOM BUY requires H4 +DI > -DI; MOM SELL requires        |
+//|      H4 -DI > +DI. Skip if H4 direction opposes trade.           |
+//|      15 Apr 11:28 MOM SELL winner also blocked (same H4 bar):     |
+//|      net +$3.85 saved − $1.20 missed = +$2.65. Worth applying.   |
+//|      Apr 14 MOM BUY winners: H4 BULL → all pass unaffected ✓     |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.210"
+#property version   "2.220"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -234,6 +246,17 @@ input bool H1_MOM_ADX_Rising = true;
 // 14 Apr 11:12 BUY: H1 ADX 43.26→44.05 (↑0.79) → winner        PASSES ✓
 // Set false to disable. Recommended: true.
 
+input bool H4_MOM_Align = true;
+// MOM mode only: require H4 ADX direction to match the trade direction.
+// For MOM BUY:  H4 +DI must exceed -DI (H4 trending bullish).
+// For MOM SELL: H4 -DI must exceed +DI (H4 trending bearish).
+// A MOM SELL when H4 is still bullish = counter-trend trade on H4.
+// H1 bearish while H4 bull = correction inside a larger uptrend.
+// 15 Apr 11:11 MOM SELL: H4 +DI=29.70 > -DI=12.48 → loss -$3.85.
+// 15 Apr 11:28 MOM SELL winner also blocked; net +$2.65 saved.
+// Apr 14 MOM BUY winners (H4 BULL, trade BUY) → all pass ✓.
+// Set false to disable. Recommended: true.
+
 input double H1_REV_DI_Min_Gap = 3.0;
 // REV mode only: minimum H1 DI gap required in the trade direction.
 // For REV SELL: H1 -DI must exceed +DI by at least this value.
@@ -322,6 +345,7 @@ int      TodayDate   = 0;
 int      ATR_Handle   = INVALID_HANDLE;
 int      ADX_Handle   = INVALID_HANDLE;   // H1 ADX
 int      M1ADX_Handle = INVALID_HANDLE;   // M1 ADX (counter-trend guard)
+int      H4ADX_Handle = INVALID_HANDLE;   // H4 ADX (direction alignment v2.22)
 datetime LastBarTime  = 0;
 
 // ── Tick-level cache (set once at top of OnTick) ───────────────────
@@ -335,6 +359,8 @@ double g_M1PlusDI    = 0.0;    // M1 +DI               (bar 1, completed)
 double g_M1MinusDI   = 0.0;    // M1 -DI               (bar 1, completed)
 double g_M1PlusDI0   = 0.0;    // M1 +DI               (bar 0, real-time)
 double g_M1MinusDI0  = 0.0;    // M1 -DI               (bar 0, real-time)
+double g_H4PlusDI    = 0.0;    // H4 +DI               (bar 1, completed)
+double g_H4MinusDI   = 0.0;    // H4 -DI               (bar 1, completed)
 bool   g_IsTrending  = false;  // true = H1 ADX >= ADX_Trend_Level
 bool   g_IsNewBar    = false;  // avoids duplicate IsNewBar() calls
 
@@ -364,6 +390,13 @@ int OnInit()
       return INIT_FAILED;
    }
 
+   H4ADX_Handle = iADX(Symbol(), PERIOD_H4, ADX_Period);
+   if(H4ADX_Handle == INVALID_HANDLE)
+   {
+      Print("ERROR: Cannot create H4 ADX indicator handle.");
+      return INIT_FAILED;
+   }
+
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(50);
    trade.SetTypeFilling(GetFillType());
@@ -376,7 +409,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.21 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.22 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -393,6 +426,7 @@ void OnDeinit(const int reason)
    if(ATR_Handle   != INVALID_HANDLE) IndicatorRelease(ATR_Handle);
    if(ADX_Handle   != INVALID_HANDLE) IndicatorRelease(ADX_Handle);
    if(M1ADX_Handle != INVALID_HANDLE) IndicatorRelease(M1ADX_Handle);
+   if(H4ADX_Handle != INVALID_HANDLE) IndicatorRelease(H4ADX_Handle);
    Comment("");
 }
 
@@ -479,6 +513,16 @@ void RefreshM1ADX()
    // Bar 0 — current forming bar (real-time DI only; uses bar-1 ADX for threshold)
    g_M1PlusDI0  = (CopyBuffer(M1ADX_Handle, 1, 0, 1, buf) >= 1) ? buf[0] : 0.0;
    g_M1MinusDI0 = (CopyBuffer(M1ADX_Handle, 2, 0, 1, buf) >= 1) ? buf[0] : 0.0;
+}
+
+// Refresh H4 +DI and -DI from last COMPLETED H4 bar (shift 1)
+// Buffer 1 = +DI, Buffer 2 = -DI
+// Sets g_H4PlusDI, g_H4MinusDI — used by H4_MOM_Align filter (v2.22)
+void RefreshH4ADX()
+{
+   double buf[];   ArraySetAsSeries(buf, true);
+   g_H4PlusDI  = (CopyBuffer(H4ADX_Handle, 1, 1, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_H4MinusDI = (CopyBuffer(H4ADX_Handle, 2, 1, 1, buf) >= 1) ? buf[0] : 0.0;
 }
 
 int CountMyPositions()
@@ -616,6 +660,19 @@ void TryOpenTrade()
       // 15 Apr 05:08 BUY: H1 ADX 37.08→34.69 (↓) → loss -$3.55 blocked.
       // 14 Apr winners: H1 ADX 43.26→44.05 (↑) → both pass unaffected.
       if(H1_MOM_ADX_Rising && g_H1ADX_Prev > 0.0 && g_ADX < g_H1ADX_Prev) return;
+
+      // ── H4 direction alignment for MOM mode (v2.22) ───────────
+      // Require H4 DI direction to match the trade direction.
+      // MOM SELL into H4 bull trend = counter-trend correction trade.
+      // MOM BUY into H4 bear trend = counter-trend bounce trade.
+      // Both are high-risk — the dominant H4 trend opposes the entry.
+      // 15 Apr 11:11 MOM SELL: H4 +DI=29.70 > -DI=12.48 → BLOCKED ✓
+      // Skip check if H4 data not yet loaded (g_H4PlusDI == 0).
+      if(H4_MOM_Align && g_H4PlusDI > 0.0)
+      {
+         if(dir == ORDER_TYPE_BUY  && g_H4MinusDI > g_H4PlusDI)  return;
+         if(dir == ORDER_TYPE_SELL && g_H4PlusDI  > g_H4MinusDI) return;
+      }
 
       // ── M1 counter-trend guard — dual-bar (v2.6) ──────────────
       // Block if EITHER bar 1 OR bar 0 shows M1 trending against trade.
@@ -894,7 +951,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.21 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.22 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -936,6 +993,15 @@ void DrawInfoPanel()
                                  + "→" + DoubleToString(g_ADX,1) + " [OK]")
                               : ("↓ " + DoubleToString(g_H1ADX_Prev,1)
                                  + "→" + DoubleToString(g_ADX,1) + " [BLOCK]")))) + "\n"
+      "  H4 MOM align: " + (!H4_MOM_Align ? "OFF"
+                           : (g_H4PlusDI <= 0.0 ? "LOADING..."
+                           : (g_H4PlusDI > g_H4MinusDI
+                              ? ("+DI=" + DoubleToString(g_H4PlusDI,1)
+                                 + " -DI=" + DoubleToString(g_H4MinusDI,1)
+                                 + " [H4-BULL: BUY=OK SELL=BLOCK]")
+                              : ("+DI=" + DoubleToString(g_H4PlusDI,1)
+                                 + " -DI=" + DoubleToString(g_H4MinusDI,1)
+                                 + " [H4-BEAR: SELL=OK BUY=BLOCK]")))) + "\n"
       "  H1 MOM gap: min=" + (H1_MOM_DI_Min_Gap > 0.0
                               ? DoubleToString(H1_MOM_DI_Min_Gap, 1)
                               : "OFF")
@@ -1016,8 +1082,9 @@ void DrawInfoPanel()
 void OnTick()
 {
    g_ATR        = GetATR();
-   RefreshADX();                                // fills g_ADX, g_PlusDI, g_MinusDI
+   RefreshADX();                                // fills g_ADX, g_H1ADX_Prev, g_PlusDI, g_MinusDI
    RefreshM1ADX();                              // fills g_M1ADX/DI bar1 + bar0
+   RefreshH4ADX();                              // fills g_H4PlusDI, g_H4MinusDI
    g_IsTrending = (g_ADX >= ADX_Trend_Level);  // true = trend → Momentum
    g_IsNewBar   = IsNewBar();
 
