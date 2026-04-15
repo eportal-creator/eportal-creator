@@ -110,9 +110,17 @@
 //|      not an SL width problem. Fix: require H1 DI gap ≥ 3.0 for MOM.|
 //|      gap=1.11 < 3.0 → blocked; gap=0.96 < 3.0 → blocked. Early-   |
 //|      morning winners (03:xx–05:xx) had H1 gaps > 10 → unaffected.  |
+//| 31. M1 ADX minimum for MOM mode (v2.20) — MOM had no M1 ADX floor.  |
+//|      REV got M1_REV_ADX_Min in v2.16; MOM was missed. When M1 ADX  |
+//|      is too low, DI lines oscillate randomly — direction is noise.  |
+//|      15 Apr 01:03 MOM BUY: M1 ADX=14.24 → DI flipped every 1-2    |
+//|      bars across 01:00-01:10 window (BULL→BEAR→BULL→BEAR×5) →      |
+//|      trade lost -$3.93. Fix: block MOM entry if M1 ADX < 20.0.     |
+//|      ADX=14.24 < 20 → blocked. Apr 14 winners: M1 ADX 30-50+ →    |
+//|      unaffected. Mirrors M1_REV_ADX_Min (v2.16) for MOM mode.      |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.190"
+#property version   "2.200"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -180,6 +188,16 @@ input double M1_DI_Min_Gap = 5.0;
 // typically shows gap 3-4 pt — passes 3.0 but momentum not yet set.
 // 5.0 requires established M1 directional conviction.
 // Set 0 to disable. Recommended: 5.0.
+
+input double M1_MOM_ADX_Min = 20.0;
+// MOM mode only: minimum M1 ADX required before entry.
+// When M1 ADX is too low, DI lines flip randomly bar-to-bar — any
+// "direction" shown is noise, not a real signal, even when H1 is
+// trending strongly. Mirrors M1_REV_ADX_Min (v2.16) for MOM mode.
+// 15 Apr 01:03 MOM BUY: M1 ADX=14.24 → DI flipped every 1-2 bars
+// throughout 01:00-01:10 window → trade lost -$3.93.
+// Apr 14 winning signal bars had M1 ADX 30-50+ → unaffected.
+// Set 0 to disable. Recommended: 20.0.
 
 input double H1_MOM_DI_Min_Gap = 3.0;
 // MOM mode only: minimum H1 DI gap required in the trade direction.
@@ -333,7 +351,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.19 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.20 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -554,6 +572,15 @@ void TryOpenTrade()
          if(dir == ORDER_TYPE_BUY  && (g_PlusDI  - g_MinusDI) < H1_MOM_DI_Min_Gap) return;
          if(dir == ORDER_TYPE_SELL && (g_MinusDI - g_PlusDI)  < H1_MOM_DI_Min_Gap) return;
       }
+
+      // ── M1 ADX minimum for MOM mode (v2.20) ───────────────────
+      // When M1 ADX is too low, DI lines oscillate randomly — any
+      // direction signal is noise, even within a strong H1 trend.
+      // 15 Apr 01:03 BUY: M1 ADX=14.24 → DI flipped every 1-2 bars
+      // across 01:00-01:10 window → no real M1 conviction → loss.
+      // Mirrors M1_REV_ADX_Min (v2.16) now applied to MOM mode.
+      // Set M1_MOM_ADX_Min=0 to disable.
+      if(M1_MOM_ADX_Min > 0.0 && g_M1ADX < M1_MOM_ADX_Min) return;
 
       // ── M1 counter-trend guard — dual-bar (v2.6) ──────────────
       // Block if EITHER bar 1 OR bar 0 shows M1 trending against trade.
@@ -832,7 +859,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.19 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.20 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -859,6 +886,14 @@ void DrawInfoPanel()
                               ? DoubleToString(M1_DI_Min_Gap, 1)
                               : "OFF")
                            + convBlock                                        + "\n"
+      "  M1 MOM ADX: min=" + (M1_MOM_ADX_Min > 0.0
+                              ? DoubleToString(M1_MOM_ADX_Min, 1)
+                              : "OFF")
+                           + (M1_MOM_ADX_Min > 0.0
+                              ? ("  [ADX=" + DoubleToString(g_M1ADX, 1)
+                                 + (g_M1ADX >= M1_MOM_ADX_Min
+                                    ? " OK]" : " LOW]"))
+                              : "")                                           + "\n"
       "  H1 MOM gap: min=" + (H1_MOM_DI_Min_Gap > 0.0
                               ? DoubleToString(H1_MOM_DI_Min_Gap, 1)
                               : "OFF")
