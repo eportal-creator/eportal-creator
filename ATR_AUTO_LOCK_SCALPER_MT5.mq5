@@ -118,9 +118,21 @@
 //|      trade lost -$3.93. Fix: block MOM entry if M1 ADX < 20.0.     |
 //|      ADX=14.24 < 20 → blocked. Apr 14 winners: M1 ADX 30-50+ →    |
 //|      unaffected. Mirrors M1_REV_ADX_Min (v2.16) for MOM mode.      |
+//| 32. H1 ADX slope filter for MOM mode (v2.21) — bearish-day pattern: |
+//|      price pushed up briefly, fired MOM BUY, then sharp drop. Root  |
+//|      cause: H1 ADX was declining (momentum weakening) even though   |
+//|      ADX still ≥ 25. Diagnostic confirmed: both Apr 15 losses had   |
+//|      declining H1 ADX; both Apr 14 winners had rising H1 ADX.      |
+//|      Fix: require H1 ADX bar-1 > H1 ADX bar-2 for MOM entry.       |
+//|      15 Apr 02:07 BUY: H1 ADX 44.08→43.11 (↓0.97) → -$2.50 →     |
+//|        blocked ✓. 15 Apr 05:08 BUY: 37.08→34.69 (↓2.39) → -$3.55 |
+//|        → blocked ✓. 14 Apr 11:07/11:12 winners: 43.26→44.05 (↑)  |
+//|        → both pass unaffected ✓. H4 filter ruled out (H4 was BULL  |
+//|        throughout). Slope check is minimal overhead: one extra       |
+//|        CopyBuffer(shift=2) on the existing ADX handle.              |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.200"
+#property version   "2.210"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -209,6 +221,18 @@ input double H1_MOM_DI_Min_Gap = 3.0;
 // 14 Apr 13:20 MOM BUY: H1 gap=0.96 pts → loss -$4.23.
 // Both blocked by 3.0 threshold. Mirrors H1_REV_DI_Min_Gap (v2.13).
 // Set 0 to disable. Recommended: 3.0.
+
+input bool H1_MOM_ADX_Rising = true;
+// MOM mode only: require H1 ADX to be rising bar-to-bar (current
+// completed H1 bar ADX > previous completed H1 bar ADX).
+// A declining H1 ADX means the H1 trend is weakening even if ADX is
+// still above 25 — the "push up then sharp drop" bull-trap pattern.
+// Verified against Apr 14 data before implementing:
+// 15 Apr 02:07 BUY: H1 ADX 44.08→43.11 (↓0.97) → loss -$2.50  BLOCKED ✓
+// 15 Apr 05:08 BUY: H1 ADX 37.08→34.69 (↓2.39) → loss -$3.55  BLOCKED ✓
+// 14 Apr 11:07 BUY: H1 ADX 43.26→44.05 (↑0.79) → winner        PASSES ✓
+// 14 Apr 11:12 BUY: H1 ADX 43.26→44.05 (↑0.79) → winner        PASSES ✓
+// Set false to disable. Recommended: true.
 
 input double H1_REV_DI_Min_Gap = 3.0;
 // REV mode only: minimum H1 DI gap required in the trade direction.
@@ -302,7 +326,8 @@ datetime LastBarTime  = 0;
 
 // ── Tick-level cache (set once at top of OnTick) ───────────────────
 double g_ATR         = 0.0;    // M1 ATR
-double g_ADX         = 0.0;    // H1 ADX main line
+double g_ADX         = 0.0;    // H1 ADX main line     (bar 1, completed)
+double g_H1ADX_Prev  = 0.0;    // H1 ADX previous bar  (bar 2, completed) — slope check
 double g_PlusDI      = 0.0;    // H1 +DI
 double g_MinusDI     = 0.0;    // H1 -DI
 double g_M1ADX       = 0.0;    // M1 ADX main line     (bar 1, completed)
@@ -351,7 +376,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.20 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.21 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -429,13 +454,14 @@ double GetATR()
 
 // Refresh ADX + DI lines from last COMPLETED bar on ADX_TimeFrame (shift 1)
 // Buffer 0 = ADX main, Buffer 1 = +DI, Buffer 2 = -DI
-// Sets g_ADX, g_PlusDI, g_MinusDI
+// Sets g_ADX, g_H1ADX_Prev, g_PlusDI, g_MinusDI
 void RefreshADX()
 {
    double buf[];   ArraySetAsSeries(buf, true);
-   g_ADX     = (CopyBuffer(ADX_Handle, 0, 1, 1, buf) >= 1) ? buf[0] : 0.0;
-   g_PlusDI  = (CopyBuffer(ADX_Handle, 1, 1, 1, buf) >= 1) ? buf[0] : 0.0;
-   g_MinusDI = (CopyBuffer(ADX_Handle, 2, 1, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_ADX      = (CopyBuffer(ADX_Handle, 0, 1, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_H1ADX_Prev = (CopyBuffer(ADX_Handle, 0, 2, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_PlusDI   = (CopyBuffer(ADX_Handle, 1, 1, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_MinusDI  = (CopyBuffer(ADX_Handle, 2, 1, 1, buf) >= 1) ? buf[0] : 0.0;
 }
 
 // Refresh M1 ADX + DI (counter-trend guard, dual-bar)
@@ -581,6 +607,15 @@ void TryOpenTrade()
       // Mirrors M1_REV_ADX_Min (v2.16) now applied to MOM mode.
       // Set M1_MOM_ADX_Min=0 to disable.
       if(M1_MOM_ADX_Min > 0.0 && g_M1ADX < M1_MOM_ADX_Min) return;
+
+      // ── H1 ADX slope filter for MOM mode (v2.21) ──────────────
+      // Require H1 ADX to be rising (current H1 bar > previous H1 bar).
+      // Declining H1 ADX = momentum weakening = "push up then drop" trap.
+      // Skip if prev bar not yet loaded (g_H1ADX_Prev == 0).
+      // 15 Apr 02:07 BUY: H1 ADX 44.08→43.11 (↓) → loss -$2.50 blocked.
+      // 15 Apr 05:08 BUY: H1 ADX 37.08→34.69 (↓) → loss -$3.55 blocked.
+      // 14 Apr winners: H1 ADX 43.26→44.05 (↑) → both pass unaffected.
+      if(H1_MOM_ADX_Rising && g_H1ADX_Prev > 0.0 && g_ADX < g_H1ADX_Prev) return;
 
       // ── M1 counter-trend guard — dual-bar (v2.6) ──────────────
       // Block if EITHER bar 1 OR bar 0 shows M1 trending against trade.
@@ -859,7 +894,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.20 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.21 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -894,6 +929,13 @@ void DrawInfoPanel()
                                  + (g_M1ADX >= M1_MOM_ADX_Min
                                     ? " OK]" : " LOW]"))
                               : "")                                           + "\n"
+      "  H1 MOM slope: " + (!H1_MOM_ADX_Rising ? "OFF"
+                           : (g_H1ADX_Prev <= 0.0 ? "LOADING..."
+                           : (g_ADX >= g_H1ADX_Prev
+                              ? ("↑ " + DoubleToString(g_H1ADX_Prev,1)
+                                 + "→" + DoubleToString(g_ADX,1) + " [OK]")
+                              : ("↓ " + DoubleToString(g_H1ADX_Prev,1)
+                                 + "→" + DoubleToString(g_ADX,1) + " [BLOCK]")))) + "\n"
       "  H1 MOM gap: min=" + (H1_MOM_DI_Min_Gap > 0.0
                               ? DoubleToString(H1_MOM_DI_Min_Gap, 1)
                               : "OFF")
