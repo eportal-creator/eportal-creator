@@ -142,6 +142,16 @@
 //|      15 Apr 11:28 MOM SELL winner also blocked (same H4 bar):     |
 //|      net +$3.85 saved − $1.20 missed = +$2.65. Worth applying.   |
 //|      Apr 14 MOM BUY winners: H4 BULL → all pass unaffected ✓     |
+//| 37. LQS DI filter bar[2] context (v2.26) — the LQS sweep bar     |
+//|      closes AGAINST the dominant trend (BUY sweep closes UP),    |
+//|      temporarily inflating +DI / suppressing -DI on bar[1].      |
+//|      This makes the spread drop below threshold → filter passes  |
+//|      → bad trade into an established downtrend.                  |
+//|      Fix: also check bar[2] (pre-sweep). If EITHER bar[1] or     |
+//|      bar[2] shows spread >= threshold, block the trade.          |
+//|      16 Apr 08:52 LQS BUY: 48-bar M1 downtrend, sweep bounce    |
+//|      pushed bar[1] spread < 15 → entered → SL hit → -$4.31.     |
+//|      Bar[2] spread would have blocked it correctly.              |
 //| 36. LQS M1 DI spread filter (v2.25) — block LQS SELL when M1 is  |
 //|      strongly bullish (+DI >> -DI), block LQS BUY when M1 is    |
 //|      strongly bearish (-DI >> +DI). A sweep-rejection signal     |
@@ -177,7 +187,7 @@
 //|      to define the swing), LQS_Wick_Min_ATR (min poke size×ATR). |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.250"
+#property version   "2.260"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -439,6 +449,8 @@ double g_M1PlusDI    = 0.0;    // M1 +DI               (bar 1, completed)
 double g_M1MinusDI   = 0.0;    // M1 -DI               (bar 1, completed)
 double g_M1PlusDI0   = 0.0;    // M1 +DI               (bar 0, real-time)
 double g_M1MinusDI0  = 0.0;    // M1 -DI               (bar 0, real-time)
+double g_M1PlusDI2   = 0.0;    // M1 +DI               (bar 2, pre-signal context)
+double g_M1MinusDI2  = 0.0;    // M1 -DI               (bar 2, pre-signal context)
 double g_H4PlusDI    = 0.0;    // H4 +DI               (bar 1, completed)
 double g_H4MinusDI   = 0.0;    // H4 -DI               (bar 1, completed)
 bool   g_IsTrending  = false;  // true = H1 ADX >= ADX_Trend_Level
@@ -489,7 +501,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.25 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.26 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -593,6 +605,9 @@ void RefreshM1ADX()
    // Bar 0 — current forming bar (real-time DI only; uses bar-1 ADX for threshold)
    g_M1PlusDI0  = (CopyBuffer(M1ADX_Handle, 1, 0, 1, buf) >= 1) ? buf[0] : 0.0;
    g_M1MinusDI0 = (CopyBuffer(M1ADX_Handle, 2, 0, 1, buf) >= 1) ? buf[0] : 0.0;
+   // Bar 2 — pre-signal context (v2.26: LQS sweep bar distorts bar-1 DI)
+   g_M1PlusDI2  = (CopyBuffer(M1ADX_Handle, 1, 2, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_M1MinusDI2 = (CopyBuffer(M1ADX_Handle, 2, 2, 1, buf) >= 1) ? buf[0] : 0.0;
 }
 
 // Refresh H4 +DI and -DI from last COMPLETED H4 bar (shift 1)
@@ -963,15 +978,27 @@ void TryLQSTrade()
       if(wickSize < g_ATR * LQS_Wick_Min_ATR) return;
    }
 
-   // ── M1 DI spread filter for LQS (v2.25) ───────────────────────
+   // ── M1 DI spread filter for LQS (v2.25 / v2.26) ─────────────────
    // Block LQS SELL when M1 is strongly bullish (+DI >> -DI).
    // Block LQS BUY  when M1 is strongly bearish (-DI >> +DI).
    // A sweep rejection fired against a dominant M1 trend rarely holds.
-   // 16 Apr 07:39 LQS SELL: spread=21.65 (blocked by 15.0 threshold).
+   // v2.25: uses bar[1] (signal bar). 16 Apr 07:39 LQS SELL: spread=21.65 → blocked.
+   // v2.26: ALSO checks bar[2] (pre-signal). The sweep bar itself closes against the
+   //        dominant trend (e.g. LQS BUY bar closes UP), temporarily boosting +DI and
+   //        suppressing -DI on bar[1] → spread drops below threshold → filter misses.
+   //        16 Apr 08:52 LQS BUY: strong M1 downtrend for 48 bars but sweep bounce
+   //        bar pushed spread below 15 on bar[1] → bad trade → -$4.31 SL hit.
+   //        Bar[2] (pre-sweep) still shows the real bearish bias → blocks correctly.
    if(LQS_DI_Spread_Filter > 0.0)
    {
-      if(dir == ORDER_TYPE_SELL && (g_M1PlusDI  - g_M1MinusDI) >= LQS_DI_Spread_Filter) return;
-      if(dir == ORDER_TYPE_BUY  && (g_M1MinusDI - g_M1PlusDI)  >= LQS_DI_Spread_Filter) return;
+      double spreadSell1 = g_M1PlusDI  - g_M1MinusDI;   // bar 1
+      double spreadBuy1  = g_M1MinusDI - g_M1PlusDI;    // bar 1
+      double spreadSell2 = g_M1PlusDI2 - g_M1MinusDI2;  // bar 2
+      double spreadBuy2  = g_M1MinusDI2 - g_M1PlusDI2;  // bar 2
+      if(dir == ORDER_TYPE_SELL && (spreadSell1 >= LQS_DI_Spread_Filter ||
+                                    spreadSell2 >= LQS_DI_Spread_Filter)) return;
+      if(dir == ORDER_TYPE_BUY  && (spreadBuy1  >= LQS_DI_Spread_Filter ||
+                                    spreadBuy2  >= LQS_DI_Spread_Filter)) return;
    }
 
    // ── SL / TP — same adaptive logic as MOM/REV ──────────────────
@@ -1145,7 +1172,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.25 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.26 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -1242,9 +1269,11 @@ void DrawInfoPanel()
                             + "  wick≥" + DoubleToString(LQS_Wick_Min_ATR, 2) + "×ATR"
                             + (LQS_DI_Spread_Filter > 0.0
                                ? ("  DIspread<" + DoubleToString(LQS_DI_Spread_Filter, 0)
-                                  + ((g_M1PlusDI  - g_M1MinusDI) >= LQS_DI_Spread_Filter ? " [SELL BLK]"
-                                   : (g_M1MinusDI - g_M1PlusDI)  >= LQS_DI_Spread_Filter ? " [BUY BLK]"
-                                   :                                                          " [OK]"))
+                                  + (((g_M1PlusDI  - g_M1MinusDI) >= LQS_DI_Spread_Filter ||
+                                      (g_M1PlusDI2 - g_M1MinusDI2) >= LQS_DI_Spread_Filter) ? " [SELL BLK]"
+                                   : ((g_M1MinusDI - g_M1PlusDI)  >= LQS_DI_Spread_Filter ||
+                                      (g_M1MinusDI2 - g_M1PlusDI2) >= LQS_DI_Spread_Filter) ? " [BUY BLK]"
+                                   :                                                             " [OK]"))
                                : "  DIspread=OFF"))) + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
