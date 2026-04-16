@@ -1230,8 +1230,8 @@ void OnTick()
       UpdateTodayProfit();
 
    ManageTrades();
-   TryOpenTrade();
-   TryLQSTrade();     // Liquidity Sweep — independent of MOM/REV
+   TryLQSTrade();     // Liquidity Sweep — runs FIRST; sweep signal takes priority over MOM/REV
+   TryOpenTrade();    // MOM or REV — blocked if LQS already opened a position
    DrawInfoPanel();
 }
 //+------------------------------------------------------------------+
