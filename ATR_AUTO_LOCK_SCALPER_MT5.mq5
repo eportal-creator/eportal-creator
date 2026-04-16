@@ -142,6 +142,17 @@
 //|      15 Apr 11:28 MOM SELL winner also blocked (same H4 bar):     |
 //|      net +$3.85 saved − $1.20 missed = +$2.65. Worth applying.   |
 //|      Apr 14 MOM BUY winners: H4 BULL → all pass unaffected ✓     |
+//| 35. ATR_Max_Filter (v2.24) — skip entry when M1 ATR exceeds a    |
+//|      maximum threshold. During extreme volatility events (e.g.    |
+//|      Apr 2 tariff crash) ATR hit $11–$17, producing SL distances  |
+//|      of $17–$34 per 0.01 lot — far beyond normal scalper sizing.  |
+//|      Apr 1–9 v2.23 backtest: nearly all outsized losses occurred  |
+//|      when ATR > $8. Blocking entry during extreme ATR prevents    |
+//|      the disproportionate SL losses that dominate the drawdown.  |
+//|      The trailing stop and entry filters cannot compensate for a  |
+//|      $29 SL distance on a $0.01/lot scalper — only skipping the  |
+//|      trade avoids it. Pairs with ATR_Min_Filter (both act on ATR).|
+//|      Default 8.0 for XAUUSD M1. Set 0.0 to disable (off).       |
 //| 34. Liquidity Sweep mode (v2.23) — independent third signal that  |
 //|      fires when a M1 bar pokes above the N-bar swing high         |
 //|      (sweeping buy-side stops) then closes back below it → SELL.  |
@@ -154,7 +165,7 @@
 //|      to define the swing), LQS_Wick_Min_ATR (min poke size×ATR). |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.230"
+#property version   "2.240"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -176,6 +187,16 @@ input int    ATR_Period          = 14;     // ATR period (M1 bars)
 input double ATR_Min_Filter      = 1.0;
 // Minimum ATR in PRICE to allow trading.
 // XAUUSD M1 typical ATR: 2.0–3.5. Set 1.5 to skip low-vol periods.
+
+input double ATR_Max_Filter      = 8.0;
+// Maximum ATR in PRICE to allow trading (0 = disabled).
+// Blocks entry when volatility is extreme — e.g. tariff crash (Apr 2
+// 2026) pushed M1 ATR to $11–$17, producing SL distances of $17–$34
+// per 0.01 lot. Nearly all outsized losses in the Apr 1–9 backtest
+// occurred when ATR exceeded $8. Skipping entry above this threshold
+// prevents disproportionate losses that trailing stop cannot recover.
+// XAUUSD M1 normal range: $2–$5. Crash spikes reach $10+.
+// Set 0.0 to disable (trade at any ATR). Recommended: 8.0.
 
 input double CandleATR_Factor    = 1.5;
 // Candle range (high-low) must be >= N × ATR.
@@ -444,7 +465,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.23 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.24 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -617,6 +638,7 @@ void TryOpenTrade()
    if(!g_IsNewBar) return;
    if(EnableSessionFilter && !InSession()) return;
    if(g_ATR <= 0.0 || g_ATR < ATR_Min_Filter) return;
+   if(ATR_Max_Filter > 0.0 && g_ATR > ATR_Max_Filter) return;   // skip extreme volatility (v2.24)
    // If AutoModeDetect is on, ADX must be loaded — never default to REVERSAL silently
    if(AutoModeDetect && g_ADX <= 0.0) return;
    if((long)(TimeCurrent() - LastEntry) < (long)(CooldownMinutes * 60)) return;
@@ -876,6 +898,7 @@ void TryLQSTrade()
    if(!g_IsNewBar)  return;
    if(EnableSessionFilter && !InSession()) return;
    if(g_ATR <= 0.0 || g_ATR < ATR_Min_Filter) return;
+   if(ATR_Max_Filter > 0.0 && g_ATR > ATR_Max_Filter) return;   // skip extreme volatility (v2.24)
    if((long)(TimeCurrent() - LastEntry) < (long)(CooldownMinutes * 60)) return;
    if(CountMyPositions() > 0) return;
 
@@ -1085,7 +1108,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.23 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.24 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -1183,6 +1206,10 @@ void DrawInfoPanel()
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
+                       + (ATR_Max_Filter > 0.0
+                          ? "  max=" + DoubleToString(ATR_Max_Filter, 2)
+                            + (g_ATR > ATR_Max_Filter ? "  [HIGH - no trade]" : "  [OK]")
+                          : "  max=OFF")
                        + "  " + atrOk                                        + "\n"
       "  Candle≥   : " + DoubleToString(g_ATR * CandleATR_Factor, 2)         + "\n"
       "  M1 ADX    : " + DoubleToString(g_M1ADX, 1)
