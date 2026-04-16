@@ -142,6 +142,15 @@
 //|      15 Apr 11:28 MOM SELL winner also blocked (same H4 bar):     |
 //|      net +$3.85 saved − $1.20 missed = +$2.65. Worth applying.   |
 //|      Apr 14 MOM BUY winners: H4 BULL → all pass unaffected ✓     |
+//| 38. LQS M1 DI alignment (v2.27) — require bar[1] M1 DI to be    |
+//|      aligned with the LQS direction. If the sweep rejection bar  |
+//|      itself couldn't flip M1 DI to the trade side, the reversal  |
+//|      is unconvincing. Blocks mild-trend / ranging cases where    |
+//|      spread is small (< 15) but M1 DI is still counter-direct.  |
+//|      16 Apr 09:27 LQS BUY: ADX=18, -DI=18.08 > +DI=15.12,      |
+//|      spread=2.96 (below v2.26 threshold) → SL hit → -$4.53.    |
+//|      Bar[1] -DI > +DI → this check blocks it. Controlled by     |
+//|      LQS_M1_DI_Align (bool, default true). Set false to disable. |
 //| 37. LQS DI filter bar[2] context (v2.26) — the LQS sweep bar     |
 //|      closes AGAINST the dominant trend (BUY sweep closes UP),    |
 //|      temporarily inflating +DI / suppressing -DI on bar[1].      |
@@ -187,7 +196,7 @@
 //|      to define the swing), LQS_Wick_Min_ATR (min poke size×ATR). |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.260"
+#property version   "2.270"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -347,6 +356,17 @@ input double LQS_DI_Spread_Filter = 15.0;
 // LQS sweeps can legitimately occur in mild trends.
 // Set 0.0 to disable. Recommended: 15.0.
 
+input bool   LQS_M1_DI_Align = true;
+// Require M1 bar[1] DI to be aligned with the LQS trade direction.
+// LQS BUY  blocked when bar[1] M1 -DI > +DI (M1 still bearish after the bounce).
+// LQS SELL blocked when bar[1] M1 +DI > -DI (M1 still bullish after the spike).
+// Rationale: if the sweep rejection bar itself couldn't flip M1 DI to the trade
+// direction, the reversal signal is unconvincing. Complements LQS_DI_Spread_Filter
+// (which catches strong-trend distortion via bar[2]); this catches mild-trend cases.
+// 16 Apr 09:27 LQS BUY: M1 ADX=18, -DI=18.08 > +DI=15.12 (spread=2.96 — below
+// LQS_DI_Spread_Filter threshold) → SL hit → -$4.53. This check would block it.
+// Set false to disable. Recommended: true.
+
 input double H1_REV_DI_Min_Gap = 3.0;
 // REV mode only: minimum H1 DI gap required in the trade direction.
 // For REV SELL: H1 -DI must exceed +DI by at least this value.
@@ -501,7 +521,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.26 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.27 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -1001,6 +1021,21 @@ void TryLQSTrade()
                                     spreadBuy2  >= LQS_DI_Spread_Filter)) return;
    }
 
+   // ── M1 DI direction alignment for LQS (v2.27) ────────────────
+   // Require bar[1] M1 DI to be on the same side as the LQS trade.
+   // If the sweep rejection bar itself couldn't flip M1 DI to the trade
+   // direction, the reversal is unconvincing — skip the trade.
+   // Works alongside LQS_DI_Spread_Filter / bar[2] check (v2.26):
+   //   v2.26 catches strong prior trend distorting bar[1] (bar[2] reveals it)
+   //   v2.27 catches mild/ranging markets where spread stays < 15 but bar[1]
+   //         DI is still counter-directional (small bearish bias).
+   // 16 Apr 09:27 LQS BUY: M1 ADX=18, -DI=18.08 > +DI=15.12 → SL -$4.53.
+   if(LQS_M1_DI_Align)
+   {
+      if(dir == ORDER_TYPE_BUY  && g_M1MinusDI > g_M1PlusDI)  return;  // M1 bearish on sweep bar
+      if(dir == ORDER_TYPE_SELL && g_M1PlusDI  > g_M1MinusDI) return;  // M1 bullish on sweep bar
+   }
+
    // ── SL / TP — same adaptive logic as MOM/REV ──────────────────
    bool   m1IsRanging = (g_M1ADX < M1_Ranging_Threshold);
    double slMult      = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
@@ -1172,7 +1207,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.26 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.27 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -1274,7 +1309,13 @@ void DrawInfoPanel()
                                    : ((g_M1MinusDI - g_M1PlusDI)  >= LQS_DI_Spread_Filter ||
                                       (g_M1MinusDI2 - g_M1PlusDI2) >= LQS_DI_Spread_Filter) ? " [BUY BLK]"
                                    :                                                             " [OK]"))
-                               : "  DIspread=OFF"))) + "\n"
+                               : "  DIspread=OFF")
+                            + (LQS_M1_DI_Align
+                               ? ("  DIalign:"
+                                  + (g_M1MinusDI > g_M1PlusDI ? " [BUY BLK]"
+                                   : g_M1PlusDI  > g_M1MinusDI ? " [SELL BLK]"
+                                   :                              " [EQ]"))
+                               : "  DIalign=OFF"))) + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
