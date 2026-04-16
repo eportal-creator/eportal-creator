@@ -1104,7 +1104,9 @@ void DrawInfoPanel()
              + "  thr=" + DoubleToString(ADX_Trend_Level, 0)
              + "  → " + (g_ADX <= 0.0 ? "NO DATA" : (g_IsTrending ? "TREND" : "RANGE"));
 
-   string atrOk  = (g_ATR >= ATR_Min_Filter) ? "[OK]" : "[LOW - no trade]";
+   string atrOk  = (g_ATR < ATR_Min_Filter)                            ? "[LOW - no trade]"
+                : (ATR_Max_Filter > 0.0 && g_ATR > ATR_Max_Filter) ? "[HIGH - no trade]"
+                :                                                      "[OK]";
    string sessStr = !EnableSessionFilter ? "DISABLED"
                   : (InSession() ? "OPEN  [OK]" : "CLOSED [waiting]");
 
@@ -1240,15 +1242,15 @@ void DrawInfoPanel()
                             + "  wick≥" + DoubleToString(LQS_Wick_Min_ATR, 2) + "×ATR"
                             + (LQS_DI_Spread_Filter > 0.0
                                ? ("  DIspread<" + DoubleToString(LQS_DI_Spread_Filter, 0)
-                                  + (MathAbs(g_M1PlusDI - g_M1MinusDI) >= LQS_DI_Spread_Filter
-                                     ? " [BLOCKED]" : " [OK]"))
+                                  + ((g_M1PlusDI  - g_M1MinusDI) >= LQS_DI_Spread_Filter ? " [SELL BLK]"
+                                   : (g_M1MinusDI - g_M1PlusDI)  >= LQS_DI_Spread_Filter ? " [BUY BLK]"
+                                   :                                                          " [OK]"))
                                : "  DIspread=OFF"))) + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
                        + (ATR_Max_Filter > 0.0
                           ? "  max=" + DoubleToString(ATR_Max_Filter, 2)
-                            + (g_ATR > ATR_Max_Filter ? "  [HIGH - no trade]" : "  [OK]")
                           : "  max=OFF")
                        + "  " + atrOk                                        + "\n"
       "  Candle≥   : " + DoubleToString(g_ATR * CandleATR_Factor, 2)         + "\n"
