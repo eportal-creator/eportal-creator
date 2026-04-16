@@ -142,6 +142,18 @@
 //|      15 Apr 11:28 MOM SELL winner also blocked (same H4 bar):     |
 //|      net +$3.85 saved − $1.20 missed = +$2.65. Worth applying.   |
 //|      Apr 14 MOM BUY winners: H4 BULL → all pass unaffected ✓     |
+//| 36. LQS M1 DI spread filter (v2.25) — block LQS SELL when M1 is  |
+//|      strongly bullish (+DI >> -DI), block LQS BUY when M1 is    |
+//|      strongly bearish (-DI >> +DI). A sweep-rejection signal     |
+//|      fired against a dominant M1 trend rarely holds: the trend  |
+//|      overwhelms the structural level and reverses back through.  |
+//|      16 Apr 07:39 LQS SELL: M1 ADX=41.75, +DI=29.01 vs -DI=7.36 |
+//|      (spread=21.65) — strongly bullish M1. Price resumed up and  |
+//|      hit SL → -$1.64. Threshold 15.0 blocks spread=21.65.       |
+//|      Mirrors M1_DI_Spread_Filter used by MOM/REV, applied to LQS.|
+//|      Set 0.0 to disable. Default 15.0 (higher than MOM/REV 8.0  |
+//|      since LQS sweeps can occur in mild trends; only extreme     |
+//|      one-sided M1 should be blocked).                            |
 //| 35. ATR_Max_Filter (v2.24) — skip entry when M1 ATR exceeds a    |
 //|      maximum threshold. During extreme volatility events (e.g.    |
 //|      Apr 2 tariff crash) ATR hit $11–$17, producing SL distances  |
@@ -165,7 +177,7 @@
 //|      to define the swing), LQS_Wick_Min_ATR (min poke size×ATR). |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.240"
+#property version   "2.250"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -312,6 +324,18 @@ input double LQS_Wick_Min_ATR = 0.3;
 // Filters noise wicks that barely graze the swing level.
 // e.g. 0.3 × $2.50 ATR = $0.75 minimum poke required.
 // Set 0.0 to allow any-size poke. Recommended: 0.3.
+
+input double LQS_DI_Spread_Filter = 15.0;
+// Block LQS SELL when M1 +DI exceeds -DI by >= this value (M1 strongly
+// bullish). Block LQS BUY when M1 -DI exceeds +DI by >= this value
+// (M1 strongly bearish). A sweep reversal against a dominant M1 trend
+// rarely holds: the trend overwhelms the level and reverses through.
+// 16 Apr 07:39 LQS SELL: M1 +DI=29.01 vs -DI=7.36 (spread=21.65) —
+// strongly bullish. Price continued up, SL hit → -$1.64.
+// Set 15.0 to block spread ≥ 15 (only extreme one-sided M1 blocked).
+// Mirrors M1_DI_Spread_Filter for MOM/REV but higher threshold since
+// LQS sweeps can legitimately occur in mild trends.
+// Set 0.0 to disable. Recommended: 15.0.
 
 input double H1_REV_DI_Min_Gap = 3.0;
 // REV mode only: minimum H1 DI gap required in the trade direction.
@@ -465,7 +489,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.24 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.25 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -939,6 +963,17 @@ void TryLQSTrade()
       if(wickSize < g_ATR * LQS_Wick_Min_ATR) return;
    }
 
+   // ── M1 DI spread filter for LQS (v2.25) ───────────────────────
+   // Block LQS SELL when M1 is strongly bullish (+DI >> -DI).
+   // Block LQS BUY  when M1 is strongly bearish (-DI >> +DI).
+   // A sweep rejection fired against a dominant M1 trend rarely holds.
+   // 16 Apr 07:39 LQS SELL: spread=21.65 (blocked by 15.0 threshold).
+   if(LQS_DI_Spread_Filter > 0.0)
+   {
+      if(dir == ORDER_TYPE_SELL && (g_M1PlusDI  - g_M1MinusDI) >= LQS_DI_Spread_Filter) return;
+      if(dir == ORDER_TYPE_BUY  && (g_M1MinusDI - g_M1PlusDI)  >= LQS_DI_Spread_Filter) return;
+   }
+
    // ── SL / TP — same adaptive logic as MOM/REV ──────────────────
    bool   m1IsRanging = (g_M1ADX < M1_Ranging_Threshold);
    double slMult      = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
@@ -1108,7 +1143,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.24 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.25 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -1202,7 +1237,12 @@ void DrawInfoPanel()
       "────────────────────────────────────────\n"
       "  LQS mode  : " + (!Enable_LQS ? "OFF"
                          : ("ON  lb=" + IntegerToString(LQS_Lookback)
-                            + "  wick≥" + DoubleToString(LQS_Wick_Min_ATR, 2) + "×ATR")) + "\n"
+                            + "  wick≥" + DoubleToString(LQS_Wick_Min_ATR, 2) + "×ATR"
+                            + (LQS_DI_Spread_Filter > 0.0
+                               ? ("  DIspread<" + DoubleToString(LQS_DI_Spread_Filter, 0)
+                                  + (MathAbs(g_M1PlusDI - g_M1MinusDI) >= LQS_DI_Spread_Filter
+                                     ? " [BLOCKED]" : " [OK]"))
+                               : "  DIspread=OFF"))) + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
