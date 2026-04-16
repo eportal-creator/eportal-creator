@@ -142,9 +142,19 @@
 //|      15 Apr 11:28 MOM SELL winner also blocked (same H4 bar):     |
 //|      net +$3.85 saved − $1.20 missed = +$2.65. Worth applying.   |
 //|      Apr 14 MOM BUY winners: H4 BULL → all pass unaffected ✓     |
+//| 34. Liquidity Sweep mode (v2.23) — independent third signal that  |
+//|      fires when a M1 bar pokes above the N-bar swing high         |
+//|      (sweeping buy-side stops) then closes back below it → SELL.  |
+//|      Or pokes below the N-bar swing low, closes back above → BUY.|
+//|      Fires in ANY market condition — no ADX/DI dependency.        |
+//|      Catches "push up then sharp drop" patterns that MOM/REV miss.|
+//|      Runs as a separate signal block after MOM/REV; the shared    |
+//|      cooldown and position count prevent double entries.          |
+//|      Three controls: Enable_LQS (on/off), LQS_Lookback (N bars   |
+//|      to define the swing), LQS_Wick_Min_ATR (min poke size×ATR). |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.220"
+#property version   "2.230"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -256,6 +266,31 @@ input bool H4_MOM_Align = true;
 // 15 Apr 11:28 MOM SELL winner also blocked; net +$2.65 saved.
 // Apr 14 MOM BUY winners (H4 BULL, trade BUY) → all pass ✓.
 // Set false to disable. Recommended: true.
+
+input group "=== Liquidity Sweep Mode ==="
+input bool   Enable_LQS       = true;
+// Fires when bar 1 pokes above the N-bar swing high (sweeping buy-side
+// stops) then closes back below it → SELL entry. Or pokes below the
+// N-bar swing low then closes back above → BUY entry.
+// Independent signal — no ADX/DI required. Works in ranging AND
+// trending markets. Catches "push up then sharp drop" traps that
+// MOM/REV miss. Runs after MOM/REV; shared cooldown + position count
+// prevent double entries on the same bar.
+// Set false to disable. Recommended: true.
+
+input int    LQS_Lookback     = 20;
+// Bars back (excluding bar 1) used to define the swing high/low.
+// e.g. 20 = highest high and lowest low of completed bars 2..21.
+// Smaller = more frequent signals (shorter-term structure).
+// Larger  = only fires on significant structural level breaks.
+// Recommended: 20.
+
+input double LQS_Wick_Min_ATR = 0.3;
+// Minimum poke distance above/below the swing level (× ATR).
+// The wick breaching the level must be at least this large.
+// Filters noise wicks that barely graze the swing level.
+// e.g. 0.3 × $2.50 ATR = $0.75 minimum poke required.
+// Set 0.0 to allow any-size poke. Recommended: 0.3.
 
 input double H1_REV_DI_Min_Gap = 3.0;
 // REV mode only: minimum H1 DI gap required in the trade direction.
@@ -409,7 +444,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.22 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.23 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -828,6 +863,105 @@ void TryOpenTrade()
 }
 
 //===================================================================
+//  LQS ENTRY  (Liquidity Sweep — independent of MOM/REV)
+//===================================================================
+// Fires when bar 1 pokes above the N-bar swing high and closes back
+// below it (SELL), or pokes below the swing low and closes back above
+// it (BUY). No ADX/DI dependency — purely price-structure based.
+// Respects the same session filter, ATR min, cooldown, and position
+// count as TryOpenTrade(), so they cannot both fire on the same bar.
+void TryLQSTrade()
+{
+   if(!Enable_LQS)  return;
+   if(!g_IsNewBar)  return;
+   if(EnableSessionFilter && !InSession()) return;
+   if(g_ATR <= 0.0 || g_ATR < ATR_Min_Filter) return;
+   if((long)(TimeCurrent() - LastEntry) < (long)(CooldownMinutes * 60)) return;
+   if(CountMyPositions() > 0) return;
+
+   // ── Bar 1 (last completed M1 bar) ─────────────────────────────
+   double h1 = iHigh(Symbol(),  PERIOD_M1, 1);
+   double l1 = iLow(Symbol(),   PERIOD_M1, 1);
+   double c1 = iClose(Symbol(), PERIOD_M1, 1);
+
+   // ── Swing high/low: bars 2..LQS_Lookback+1 ────────────────────
+   double highs[], lows[];
+   ArraySetAsSeries(highs, true);
+   ArraySetAsSeries(lows,  true);
+   if(CopyHigh(Symbol(), PERIOD_M1, 2, LQS_Lookback, highs) < LQS_Lookback) return;
+   if(CopyLow (Symbol(), PERIOD_M1, 2, LQS_Lookback, lows)  < LQS_Lookback) return;
+
+   double swingHigh = highs[ArrayMaximum(highs)];
+   double swingLow  = lows [ArrayMinimum(lows)];
+
+   // ── Sweep detection ────────────────────────────────────────────
+   // LQS SELL: bar 1 poked ABOVE swing high AND closed back below it
+   // LQS BUY:  bar 1 poked BELOW swing low  AND closed back above it
+   bool lqsSell = (h1 > swingHigh) && (c1 < swingHigh);
+   bool lqsBuy  = (l1 < swingLow)  && (c1 > swingLow);
+
+   if(!lqsSell && !lqsBuy) return;
+
+   ENUM_ORDER_TYPE dir;
+   double          price;
+   if(lqsSell) { dir = ORDER_TYPE_SELL; price = SymbolInfoDouble(Symbol(), SYMBOL_BID); }
+   else        { dir = ORDER_TYPE_BUY;  price = SymbolInfoDouble(Symbol(), SYMBOL_ASK); }
+
+   // ── Wick size filter ───────────────────────────────────────────
+   // The poke above/below the swing level must be >= LQS_Wick_Min_ATR × ATR.
+   // Filters noise wicks that barely graze the level.
+   if(LQS_Wick_Min_ATR > 0.0)
+   {
+      double wickSize = (dir == ORDER_TYPE_SELL) ? (h1 - swingHigh) : (swingLow - l1);
+      if(wickSize < g_ATR * LQS_Wick_Min_ATR) return;
+   }
+
+   // ── SL / TP — same adaptive logic as MOM/REV ──────────────────
+   bool   m1IsRanging = (g_M1ADX < M1_Ranging_Threshold);
+   double slMult      = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
+   double slDist      = g_ATR * slMult;
+   double tpDist      = (TP_ATR_Factor > 0.0) ? g_ATR * TP_ATR_Factor : 0.0;
+
+   double sl, tp;
+   if(dir == ORDER_TYPE_BUY)
+   {
+      sl = NormalizeDouble(price - slDist, _Digits);
+      tp = (tpDist > 0.0) ? NormalizeDouble(price + tpDist, _Digits) : 0.0;
+   }
+   else
+   {
+      sl = NormalizeDouble(price + slDist, _Digits);
+      tp = (tpDist > 0.0) ? NormalizeDouble(price - tpDist, _Digits) : 0.0;
+   }
+
+   string tradeComment = "Project ATR | LQS"
+                        + (dir == ORDER_TYPE_BUY ? " BUY" : " SELL");
+
+   bool ok = (dir == ORDER_TYPE_BUY)
+             ? trade.Buy (LotSize, Symbol(), price, sl, tp, tradeComment)
+             : trade.Sell(LotSize, Symbol(), price, sl, tp, tradeComment);
+
+   if(ok)
+   {
+      LastEntry = TimeCurrent();
+      Print("OPEN LQS ", (dir == ORDER_TYPE_BUY ? "BUY " : "SELL"),
+            " | swingH=",  DoubleToString(swingHigh, _Digits),
+            " | swingL=",  DoubleToString(swingLow,  _Digits),
+            " | bar1H=",   DoubleToString(h1, _Digits),
+            " | bar1L=",   DoubleToString(l1, _Digits),
+            " | bar1C=",   DoubleToString(c1, _Digits),
+            " | SL=",      DoubleToString(slMult, 1), "xATR",
+                           (m1IsRanging ? " [RANGING]" : " [TREND]"),
+            " | SLdist=",  DoubleToString(slDist, 2),
+            " | ATR=",     DoubleToString(g_ATR,  2),
+            " | SGT=",     TimeToString(GetSGT(), TIME_MINUTES));
+   }
+   else
+      Print("LQS Order FAIL [", trade.ResultRetcode(), "] ",
+            trade.ResultRetcodeDescription());
+}
+
+//===================================================================
 //  TRADE MANAGEMENT  (every tick)
 //===================================================================
 void ManageTrades()
@@ -951,7 +1085,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.22 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.23 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -1043,6 +1177,10 @@ void DrawInfoPanel()
                                     ? " OK]" : " PEAK]"))
                               : "")                                           + "\n"
       "────────────────────────────────────────\n"
+      "  LQS mode  : " + (!Enable_LQS ? "OFF"
+                         : ("ON  lb=" + IntegerToString(LQS_Lookback)
+                            + "  wick≥" + DoubleToString(LQS_Wick_Min_ATR, 2) + "×ATR")) + "\n"
+      "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
                        + "  " + atrOk                                        + "\n"
@@ -1093,6 +1231,7 @@ void OnTick()
 
    ManageTrades();
    TryOpenTrade();
+   TryLQSTrade();     // Liquidity Sweep — independent of MOM/REV
    DrawInfoPanel();
 }
 //+------------------------------------------------------------------+
