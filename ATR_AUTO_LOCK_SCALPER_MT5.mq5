@@ -142,6 +142,13 @@
 //|      15 Apr 11:28 MOM SELL winner also blocked (same H4 bar):     |
 //|      net +$3.85 saved − $1.20 missed = +$2.65. Worth applying.   |
 //|      Apr 14 MOM BUY winners: H4 BULL → all pass unaffected ✓     |
+//| 39. Push notifications (v2.28) — OnTimer sends a status update  |
+//|      every Notify_Interval_Min minutes (default 10) to the MT5  |
+//|      mobile app: price, H1/M1 ADX+DI, LQS zone distances, ATR. |
+//|      Separate zone-approach alert fires immediately when price   |
+//|      enters within Notify_Zone_ATR_Dist × ATR of a LQS level,  |
+//|      with 5-min cooldown to prevent spamming. Both require       |
+//|      Enable_Notify=true and MetaQuotes ID set in MT5 options.   |
 //| 38. LQS M1 DI alignment (v2.27) — require bar[1] M1 DI to be    |
 //|      aligned with the LQS direction. If the sweep rejection bar  |
 //|      itself couldn't flip M1 DI to the trade side, the reversal  |
@@ -196,7 +203,7 @@
 //|      to define the swing), LQS_Wick_Min_ATR (min poke size×ATR). |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.270"
+#property version   "2.280"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -446,11 +453,34 @@ input int    SG_End              = 20;    // Session close (SGT hour, 24h)
 // SGT = UTC+8. Broker GMT offset is auto-detected via TimeGMT().
 // No manual offset entry needed — works on any broker.
 
+input group "=== Notifications ==="
+input bool   Enable_Notify          = true;
+// Send push notifications to MT5 mobile app.
+// Requires MetaQuotes ID set in: MT5 → Tools → Options → Notifications.
+// Two types: (1) periodic status every Notify_Interval_Min minutes,
+//            (2) immediate zone-approach alert when price comes within
+//                Notify_Zone_ATR_Dist × ATR of a LQS swing level.
+// Set false to disable all notifications.
+
+input int    Notify_Interval_Min    = 10;
+// Periodic status update interval in minutes.
+// Sends: current price, mode, H1/M1 ADX+DI, distance to LQS zones.
+// Set 0 to disable periodic updates (zone alerts still work).
+
+input double Notify_Zone_ATR_Dist   = 2.0;
+// Send immediate alert when price comes within this many × ATR of a
+// LQS swing level (potential trade zone approaching).
+// e.g. ATR=2.50, dist=2.0 → alert when price is within $5.00 of zone.
+// Set 0.0 to disable zone approach alerts.
+
 //===================================================================
 //  GLOBALS
 //===================================================================
-datetime LastEntry   = 0;
-double   TodayProfit = 0.0;
+datetime LastEntry      = 0;
+double   TodayProfit   = 0.0;
+double   g_LQS_SwingHigh = 0.0;   // LQS swing high (bars 2..LQS_Lookback+1)
+double   g_LQS_SwingLow  = 0.0;   // LQS swing low
+datetime g_LastZoneAlert = 0;      // prevents spamming zone-approach alerts
 int      TodayDate   = 0;
 int      ATR_Handle   = INVALID_HANDLE;
 int      ADX_Handle   = INVALID_HANDLE;   // H1 ADX
@@ -521,7 +551,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.27 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.28 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -530,11 +560,15 @@ int OnInit()
          " | TS@",       TSstart_ATR_Factor, "xATR",
          " | BrokerGMT=", gmtStr, " (auto)");
 
+   if(Enable_Notify && Notify_Interval_Min > 0)
+      EventSetTimer(Notify_Interval_Min * 60);
+
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
+   EventKillTimer();
    if(ATR_Handle   != INVALID_HANDLE) IndicatorRelease(ATR_Handle);
    if(ADX_Handle   != INVALID_HANDLE) IndicatorRelease(ADX_Handle);
    if(M1ADX_Handle != INVALID_HANDLE) IndicatorRelease(M1ADX_Handle);
@@ -638,6 +672,79 @@ void RefreshH4ADX()
    double buf[];   ArraySetAsSeries(buf, true);
    g_H4PlusDI  = (CopyBuffer(H4ADX_Handle, 1, 1, 1, buf) >= 1) ? buf[0] : 0.0;
    g_H4MinusDI = (CopyBuffer(H4ADX_Handle, 2, 1, 1, buf) >= 1) ? buf[0] : 0.0;
+}
+
+// Calculate LQS swing high/low (bars 2..LQS_Lookback+1) into globals.
+// Called each tick so OnTimer() and proximity alerts share the same levels.
+void RefreshLQSLevels()
+{
+   double highs[], lows[];
+   ArraySetAsSeries(highs, true);
+   ArraySetAsSeries(lows,  true);
+   if(CopyHigh(Symbol(), PERIOD_M1, 2, LQS_Lookback, highs) < LQS_Lookback) return;
+   if(CopyLow (Symbol(), PERIOD_M1, 2, LQS_Lookback, lows)  < LQS_Lookback) return;
+   g_LQS_SwingHigh = highs[ArrayMaximum(highs)];
+   g_LQS_SwingLow  = lows [ArrayMinimum(lows)];
+}
+
+// Build a compact status string for push notifications.
+string BuildNotifyStatus(bool zoneAlert, string zoneSide)
+{
+   double price      = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double distSell   = (g_LQS_SwingHigh > 0)   ? g_LQS_SwingHigh - price : 0.0;
+   double distBuy    = (g_LQS_SwingLow  > 0)   ? price - g_LQS_SwingLow  : 0.0;
+   string modeStr    = g_IsTrending ? "MOM" : "REV";
+   string dirStr     = (g_PlusDI > g_MinusDI) ? "BUY" : "SELL";
+   string m1Range    = (g_M1ADX < 25) ? "[RANGE]" : "[TREND]";
+
+   string header = zoneAlert
+                   ? ("⚠ ATR ZONE " + zoneSide + " | " + Symbol() + " " + DoubleToString(price, 2))
+                   : ("ATR " + Symbol() + " " + DoubleToString(price, 2) + " | " + modeStr + "-" + dirStr);
+
+   string zones  = "SELL@" + DoubleToString(g_LQS_SwingHigh, 2) + "(+" + DoubleToString(distSell, 1) + ")"
+                 + "  BUY@"  + DoubleToString(g_LQS_SwingLow,  2) + "(-" + DoubleToString(distBuy,  1) + ")";
+
+   string h1line = "H1 ADX=" + DoubleToString(g_ADX, 1)
+                 + " +DI="   + DoubleToString(g_PlusDI,  1)
+                 + " -DI="   + DoubleToString(g_MinusDI, 1)
+                 + " gap="   + DoubleToString(MathAbs(g_PlusDI - g_MinusDI), 1);
+
+   string m1line = "M1 ADX=" + DoubleToString(g_M1ADX, 1)
+                 + " +DI="   + DoubleToString(g_M1PlusDI, 1)
+                 + " -DI="   + DoubleToString(g_M1MinusDI, 1)
+                 + " " + m1Range
+                 + "  ATR="  + DoubleToString(g_ATR, 2);
+
+   return header + "\n" + zones + "\n" + h1line + "\n" + m1line;
+}
+
+// Periodic status notification (fires from OnTimer every Notify_Interval_Min).
+void OnTimer()
+{
+   if(!Enable_Notify) return;
+   SendNotification(BuildNotifyStatus(false, ""));
+}
+
+// Zone-approach alert: check if price is within Notify_Zone_ATR_Dist × ATR
+// of either LQS swing level. Cooldown of 5 minutes prevents spamming.
+void CheckZoneApproach()
+{
+   if(!Enable_Notify || Notify_Zone_ATR_Dist <= 0.0) return;
+   if(g_ATR <= 0.0 || g_LQS_SwingHigh <= 0.0 || g_LQS_SwingLow <= 0.0) return;
+   if((long)(TimeCurrent() - g_LastZoneAlert) < 300) return;  // 5-min cooldown
+
+   double price    = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double thresh   = Notify_Zone_ATR_Dist * g_ATR;
+
+   bool nearSell = (g_LQS_SwingHigh - price) <= thresh && price < g_LQS_SwingHigh;
+   bool nearBuy  = (price - g_LQS_SwingLow)  <= thresh && price > g_LQS_SwingLow;
+
+   if(nearSell || nearBuy)
+   {
+      string side = nearSell ? "SELL" : "BUY";
+      SendNotification(BuildNotifyStatus(true, side));
+      g_LastZoneAlert = TimeCurrent();
+   }
 }
 
 int CountMyPositions()
@@ -966,15 +1073,10 @@ void TryLQSTrade()
    double l1 = iLow(Symbol(),   PERIOD_M1, 1);
    double c1 = iClose(Symbol(), PERIOD_M1, 1);
 
-   // ── Swing high/low: bars 2..LQS_Lookback+1 ────────────────────
-   double highs[], lows[];
-   ArraySetAsSeries(highs, true);
-   ArraySetAsSeries(lows,  true);
-   if(CopyHigh(Symbol(), PERIOD_M1, 2, LQS_Lookback, highs) < LQS_Lookback) return;
-   if(CopyLow (Symbol(), PERIOD_M1, 2, LQS_Lookback, lows)  < LQS_Lookback) return;
-
-   double swingHigh = highs[ArrayMaximum(highs)];
-   double swingLow  = lows [ArrayMinimum(lows)];
+   // ── Swing high/low: use globals refreshed each tick ───────────
+   if(g_LQS_SwingHigh <= 0.0 || g_LQS_SwingLow <= 0.0) return;
+   double swingHigh = g_LQS_SwingHigh;
+   double swingLow  = g_LQS_SwingLow;
 
    // ── Sweep detection ────────────────────────────────────────────
    // LQS SELL: bar 1 poked ABOVE swing high AND closed back below it
@@ -1207,7 +1309,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.27 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.28 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -1367,6 +1469,9 @@ void OnTick()
 
    if(g_IsNewBar)
       UpdateTodayProfit();
+
+   RefreshLQSLevels();   // update g_LQS_SwingHigh/Low — shared by TryLQSTrade + notifications
+   CheckZoneApproach();  // send push alert if price is near a LQS zone
 
    ManageTrades();
    TryLQSTrade();     // Liquidity Sweep — runs FIRST; sweep signal takes priority over MOM/REV
