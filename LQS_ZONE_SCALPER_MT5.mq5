@@ -33,7 +33,7 @@ input group "=== LQS Settings ==="
 input int    LQS_Lookback        = 20;
 input double LQS_Wick_Min_ATR    = 0.3;
 input double LQS_DI_Spread_Filter = 15.0;
-input double LQS_M1_DI_Max_Counter = 5.0;
+input double LQS_M1_DI_Max_Counter = 0.0;
 input double LQS_TP_Fixed        = 0.35;
 
 input group "=== Session Filter (SGT auto-detected) ==="
