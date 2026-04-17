@@ -728,7 +728,7 @@ string BuildNotifyStatus(bool zoneAlert, string zoneSide)
                          ? "Spike BELOW " + DoubleToString(zonePrice, 2) + " then close ABOVE → BUY"
                          : "Spike ABOVE " + DoubleToString(zonePrice, 2) + " then close BELOW → SELL";
 
-      msg = "XAUUSD " + DoubleToString(price, 2) + " | " + zoneSide + " ZONE $"
+      msg = "[MAIN] XAUUSD " + DoubleToString(price, 2) + " | " + zoneSide + " ZONE $"
             + DoubleToString(dist, 1) + " away\n"
             + action + "\n"
             + h1Mode + " | " + m1Dir + " | ATR=" + DoubleToString(g_ATR, 2) + "\n"
@@ -737,7 +737,7 @@ string BuildNotifyStatus(bool zoneAlert, string zoneSide)
    else
    {
       // Periodic update — show both zones clearly
-      msg = "XAUUSD " + DoubleToString(price, 2) + " | " + h1Mode + " | " + m1Dir + "\n"
+      msg = "[MAIN] XAUUSD " + DoubleToString(price, 2) + " | " + h1Mode + " | " + m1Dir + "\n"
             + "SELL zone: " + DoubleToString(g_LQS_SwingHigh, 2)
             + "  (price +" + DoubleToString(distSell, 1) + " away)\n"
             + "  → spike above + close below = SELL\n"

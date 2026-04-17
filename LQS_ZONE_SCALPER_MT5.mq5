@@ -243,7 +243,7 @@ string BuildNotifyStatus(bool zoneAlert, string zoneSide)
       string action    = isBuy
                          ? "Spike BELOW " + DoubleToString(zonePrice, 2) + " then close ABOVE -> BUY"
                          : "Spike ABOVE " + DoubleToString(zonePrice, 2) + " then close BELOW -> SELL";
-      msg = "XAUUSD " + DoubleToString(price, 2) + " | " + zoneSide + " ZONE $"
+      msg = "[LQS] XAUUSD " + DoubleToString(price, 2) + " | " + zoneSide + " ZONE $"
             + DoubleToString(dist, 1) + " away\n"
             + action + "\n"
             + m1Dir + " | ATR=" + DoubleToString(g_ATR, 2) + "\n"
@@ -252,7 +252,7 @@ string BuildNotifyStatus(bool zoneAlert, string zoneSide)
    }
    else
    {
-      msg = "XAUUSD " + DoubleToString(price, 2) + " | " + m1Dir + "\n"
+      msg = "[LQS] XAUUSD " + DoubleToString(price, 2) + " | " + m1Dir + "\n"
             + "SELL zone: " + DoubleToString(g_LQS_SwingHigh, 2)
             + "  (price +" + DoubleToString(distSell, 1) + " away)\n"
             + "  -> spike above + close below = SELL\n"
