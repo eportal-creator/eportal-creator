@@ -203,7 +203,7 @@
 //|      to define the swing), LQS_Wick_Min_ATR (min poke size×ATR). |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.280"
+#property version   "2.290"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -363,16 +363,24 @@ input double LQS_DI_Spread_Filter = 15.0;
 // LQS sweeps can legitimately occur in mild trends.
 // Set 0.0 to disable. Recommended: 15.0.
 
-input bool   LQS_M1_DI_Align = true;
-// Require M1 bar[1] DI to be aligned with the LQS trade direction.
-// LQS BUY  blocked when bar[1] M1 -DI > +DI (M1 still bearish after the bounce).
-// LQS SELL blocked when bar[1] M1 +DI > -DI (M1 still bullish after the spike).
-// Rationale: if the sweep rejection bar itself couldn't flip M1 DI to the trade
-// direction, the reversal signal is unconvincing. Complements LQS_DI_Spread_Filter
-// (which catches strong-trend distortion via bar[2]); this catches mild-trend cases.
-// 16 Apr 09:27 LQS BUY: M1 ADX=18, -DI=18.08 > +DI=15.12 (spread=2.96 — below
-// LQS_DI_Spread_Filter threshold) → SL hit → -$4.53. This check would block it.
-// Set false to disable. Recommended: true.
+input double LQS_M1_DI_Max_Counter = 5.0;
+// Maximum M1 bar[1] counter-DI spread allowed for LQS entry.
+// LQS SELL blocked when M1 +DI exceeds -DI by >= this value (M1 meaningfully bullish).
+// LQS BUY  blocked when M1 -DI exceeds +DI by >= this value (M1 meaningfully bearish).
+// Replaces binary LQS_M1_DI_Align (v2.27) which blocked ALL counter-DI cases,
+// including mild M1 — which prevented valid LQS zone trades.
+// 17 Apr 05:08 LQS SELL: M1 BULL spread ~1-3 — blocked by v2.27, was a winner.
+// With threshold=5.0: spread 1-3 < 5 → allowed. Spread >=5 → blocked.
+// Still blocks the Apr 16 loss cases via LQS_DI_Spread_Filter (spread >=15).
+// Set 0.0 to disable. Recommended: 5.0.
+
+input double LQS_TP_Fixed = 0.35;
+// Fixed take-profit distance in price units for LQS trades (overrides TP_ATR_Factor).
+// e.g. 0.35 = TP $0.35 profit at 0.01 lot XAUUSD (price moves 0.35 points).
+// Matches manual scalping style: quick exit at the first rejection move.
+// LQS zone rejections typically give 0.3–0.5 point moves before reversing.
+// Set 0.0 to use TP_ATR_Factor instead (same as MOM/REV).
+// Recommended: 0.35.
 
 input double H1_REV_DI_Min_Gap = 3.0;
 // REV mode only: minimum H1 DI gap required in the trade direction.
@@ -551,7 +559,7 @@ int OnInit()
                    ? "UTC+" + IntegerToString(detectedOffset)
                    : "UTC"  + IntegerToString(detectedOffset);
 
-   Print("Project ATR MT5 v2.28 | Symbol=", Symbol(),
+   Print("Project ATR MT5 v2.29 | Symbol=", Symbol(),
          " | AutoMode=", (AutoModeDetect ? "ADX" : (MomentumMode ? "MOMENTUM" : "REVERSAL")),
          " | ADX_TF=",   EnumToString(ADX_TimeFrame),
          " | ADX_Level=",ADX_Trend_Level,
@@ -706,15 +714,15 @@ string BuildNotifyStatus(bool zoneAlert, string zoneSide)
    else if(m1Spread <= -8) m1Dir = "M1 BEAR";
    else                    m1Dir = "M1 NEUTRAL";
 
-   // Would the EA actually trade this zone? (LQS filter check)
-   // Blocked if M1 DI counter-directional (v2.27 LQS_M1_DI_Align)
-   // or M1 spread >= LQS_DI_Spread_Filter (v2.25/v2.26)
-   bool sellBlocked = (g_M1PlusDI > g_M1MinusDI)
-                   || ((g_M1PlusDI  - g_M1MinusDI)  >= LQS_DI_Spread_Filter)
-                   || ((g_M1PlusDI2 - g_M1MinusDI2) >= LQS_DI_Spread_Filter);
-   bool buyBlocked  = (g_M1MinusDI > g_M1PlusDI)
-                   || ((g_M1MinusDI - g_M1PlusDI)   >= LQS_DI_Spread_Filter)
-                   || ((g_M1MinusDI2 - g_M1PlusDI2) >= LQS_DI_Spread_Filter);
+   // Would the EA actually trade this zone? (LQS filter check, v2.29)
+   bool sellBlocked = ((g_M1PlusDI  - g_M1MinusDI)  >= LQS_DI_Spread_Filter)
+                   || ((g_M1PlusDI2 - g_M1MinusDI2) >= LQS_DI_Spread_Filter)
+                   || (LQS_M1_DI_Max_Counter > 0.0 &&
+                       (g_M1PlusDI - g_M1MinusDI) >= LQS_M1_DI_Max_Counter);
+   bool buyBlocked  = ((g_M1MinusDI - g_M1PlusDI)   >= LQS_DI_Spread_Filter)
+                   || ((g_M1MinusDI2 - g_M1PlusDI2) >= LQS_DI_Spread_Filter)
+                   || (LQS_M1_DI_Max_Counter > 0.0 &&
+                       (g_M1MinusDI - g_M1PlusDI) >= LQS_M1_DI_Max_Counter);
 
    string msg = "";
 
@@ -1156,26 +1164,27 @@ void TryLQSTrade()
                                     spreadBuy2  >= LQS_DI_Spread_Filter)) return;
    }
 
-   // ── M1 DI direction alignment for LQS (v2.27) ────────────────
-   // Require bar[1] M1 DI to be on the same side as the LQS trade.
-   // If the sweep rejection bar itself couldn't flip M1 DI to the trade
-   // direction, the reversal is unconvincing — skip the trade.
-   // Works alongside LQS_DI_Spread_Filter / bar[2] check (v2.26):
-   //   v2.26 catches strong prior trend distorting bar[1] (bar[2] reveals it)
-   //   v2.27 catches mild/ranging markets where spread stays < 15 but bar[1]
-   //         DI is still counter-directional (small bearish bias).
-   // 16 Apr 09:27 LQS BUY: M1 ADX=18, -DI=18.08 > +DI=15.12 → SL -$4.53.
-   if(LQS_M1_DI_Align)
+   // ── M1 DI counter-spread limit for LQS (v2.29) ──────────────
+   // Block only when M1 counter-DI spread is MEANINGFUL (>= threshold).
+   // Replaces binary v2.27 check which blocked ALL counter-DI cases.
+   // 17 Apr 05:08 LQS SELL: M1 BULL spread ~1-3 → valid winner, was blocked.
+   // 16 Apr 09:27 LQS BUY:  M1 BEAR spread=2.96 → still passes if < 5.
+   //   (Protected by LQS_DI_Spread_Filter=15 + bar[2] for stronger cases.)
+   if(LQS_M1_DI_Max_Counter > 0.0)
    {
-      if(dir == ORDER_TYPE_BUY  && g_M1MinusDI > g_M1PlusDI)  return;  // M1 bearish on sweep bar
-      if(dir == ORDER_TYPE_SELL && g_M1PlusDI  > g_M1MinusDI) return;  // M1 bullish on sweep bar
+      if(dir == ORDER_TYPE_SELL && (g_M1PlusDI  - g_M1MinusDI) >= LQS_M1_DI_Max_Counter) return;
+      if(dir == ORDER_TYPE_BUY  && (g_M1MinusDI - g_M1PlusDI)  >= LQS_M1_DI_Max_Counter) return;
    }
 
    // ── SL / TP — same adaptive logic as MOM/REV ──────────────────
    bool   m1IsRanging = (g_M1ADX < M1_Ranging_Threshold);
    double slMult      = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
    double slDist      = g_ATR * slMult;
-   double tpDist      = (TP_ATR_Factor > 0.0) ? g_ATR * TP_ATR_Factor : 0.0;
+   // LQS_TP_Fixed overrides TP_ATR_Factor for LQS trades (v2.29).
+   // Enables quick fixed-exit style matching manual scalping at zone rejections.
+   double tpDist = (LQS_TP_Fixed > 0.0) ? LQS_TP_Fixed
+                 : (TP_ATR_Factor > 0.0) ? g_ATR * TP_ATR_Factor
+                 : 0.0;
 
    double sl, tp;
    if(dir == ORDER_TYPE_BUY)
@@ -1342,7 +1351,7 @@ void DrawInfoPanel()
       convBlock = "  [DISABLED]";
 
    string info =
-      "╔══ PROJECT ATR  v2.28 (MT5) ══════════╗\n"
+      "╔══ PROJECT ATR  v2.29 (MT5) ══════════╗\n"
       "  Symbol    : " + Symbol()                                            + "\n"
       "────────────────────────────────────────\n"
       "  Mode      : " + activeMode
@@ -1445,12 +1454,15 @@ void DrawInfoPanel()
                                       (g_M1MinusDI2 - g_M1PlusDI2) >= LQS_DI_Spread_Filter) ? " [BUY BLK]"
                                    :                                                             " [OK]"))
                                : "  DIspread=OFF")
-                            + (LQS_M1_DI_Align
-                               ? ("  DIalign:"
-                                  + (g_M1MinusDI > g_M1PlusDI ? " [BUY BLK]"
-                                   : g_M1PlusDI  > g_M1MinusDI ? " [SELL BLK]"
-                                   :                              " [EQ]"))
-                               : "  DIalign=OFF"))) + "\n"
+                            + (LQS_M1_DI_Max_Counter > 0.0
+                               ? ("  ctr<" + DoubleToString(LQS_M1_DI_Max_Counter, 0)
+                                  + ":" + ((g_M1PlusDI  - g_M1MinusDI) >= LQS_M1_DI_Max_Counter ? " [SELL BLK]"
+                                          :(g_M1MinusDI - g_M1PlusDI)  >= LQS_M1_DI_Max_Counter ? " [BUY BLK]"
+                                          :                                                          " [OK]"))
+                               : "  ctr=OFF")
+                            + (LQS_TP_Fixed > 0.0
+                               ? ("  TP=" + DoubleToString(LQS_TP_Fixed, 2) + "fixed")
+                               : "  TP=ATR"))) + "\n"
       "────────────────────────────────────────\n"
       "  ATR(" + IntegerToString(ATR_Period) + ")    : " + DoubleToString(g_ATR, 2)
                        + "   min=" + DoubleToString(ATR_Min_Filter, 2)
