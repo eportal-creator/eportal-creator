@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.100)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.110)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.100"
-#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1"
+#property version   "1.110"
+#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | DI_Spread=30"
 
 #include <Trade\Trade.mqh>
 CTrade trade;
@@ -32,7 +32,7 @@ input double TSstep_ATR_Factor   = 0.4;
 input group "=== LQS Settings ==="
 input int    LQS_Lookback        = 20;
 input double LQS_Wick_Min_ATR    = 0.0;
-input double LQS_DI_Spread_Filter = 0.0;
+input double LQS_DI_Spread_Filter = 30.0;
 input double LQS_M1_DI_Max_Counter = 0.0;
 input double LQS_TP_Fixed        = 0.35;
 
@@ -86,7 +86,7 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.100 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.110 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | LQS_TP_Fixed=", LQS_TP_Fixed,
          " | DI_Max_Counter=", LQS_M1_DI_Max_Counter,
