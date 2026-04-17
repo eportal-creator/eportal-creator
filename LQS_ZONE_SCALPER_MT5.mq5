@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.110)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.120)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.110"
+#property version   "1.120"
 #property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | DI_Spread=30"
 
 #include <Trade\Trade.mqh>
@@ -86,7 +86,7 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.110 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.120 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | LQS_TP_Fixed=", LQS_TP_Fixed,
          " | DI_Max_Counter=", LQS_M1_DI_Max_Counter,
@@ -416,6 +416,32 @@ void TryLQSTrade()
    if(ok)
    {
       LastEntry = TimeCurrent();
+
+      // Correct TP for slippage: fill price may differ from requested price,
+      // which would place TP on the wrong side of entry.
+      if(tpDist > 0.0)
+      {
+         double fillPrice = trade.ResultPrice();
+         if(fillPrice > 0.0)
+         {
+            double realTP = (dir == ORDER_TYPE_BUY)
+                            ? NormalizeDouble(fillPrice + tpDist, _Digits)
+                            : NormalizeDouble(fillPrice - tpDist, _Digits);
+            if(realTP != tp)
+            {
+               ulong ticket = trade.ResultOrder();
+               if(ticket > 0 && !trade.PositionModify(ticket, sl, realTP))
+                  Print("TP correct FAIL: ", trade.ResultRetcodeDescription());
+               else
+                  Print("TP corrected fill=", DoubleToString(fillPrice, _Digits),
+                        " requested=", DoubleToString(price, _Digits),
+                        " slip=", DoubleToString(fillPrice - price, _Digits),
+                        " oldTP=", DoubleToString(tp, _Digits),
+                        " newTP=", DoubleToString(realTP, _Digits));
+            }
+         }
+      }
+
       Print("OPEN LQS ", (dir == ORDER_TYPE_BUY ? "BUY " : "SELL"),
             " | swingH=",  DoubleToString(g_LQS_SwingHigh, _Digits),
             " | swingL=",  DoubleToString(g_LQS_SwingLow,  _Digits),
