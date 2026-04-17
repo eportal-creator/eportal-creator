@@ -1,13 +1,16 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.120)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.130)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.120"
+#property version   "1.130"
 #property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | DI_Spread=30"
 
 #include <Trade\Trade.mqh>
+
+#define LQS_LINE_SELL  "LQS_SwingHigh"
+#define LQS_LINE_BUY   "LQS_SwingLow"
 CTrade trade;
 
 //===================================================================
@@ -86,7 +89,7 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.120 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.130 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | LQS_TP_Fixed=", LQS_TP_Fixed,
          " | DI_Max_Counter=", LQS_M1_DI_Max_Counter,
@@ -103,6 +106,8 @@ void OnDeinit(const int reason)
    EventKillTimer();
    if(ATR_Handle   != INVALID_HANDLE) IndicatorRelease(ATR_Handle);
    if(M1ADX_Handle != INVALID_HANDLE) IndicatorRelease(M1ADX_Handle);
+   ObjectDelete(0, LQS_LINE_SELL);
+   ObjectDelete(0, LQS_LINE_BUY);
    Comment("");
 }
 
@@ -463,10 +468,41 @@ void TryLQSTrade()
 }
 
 //===================================================================
+//  ZONE LINES
+//===================================================================
+void SetHLine(string name, double price, color clr, string tooltip)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
+      ObjectSetInteger(0, name, OBJPROP_COLOR,     clr);
+      ObjectSetInteger(0, name, OBJPROP_STYLE,     STYLE_DASH);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH,     1);
+      ObjectSetInteger(0, name, OBJPROP_BACK,      true);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE,false);
+      ObjectSetString (0, name, OBJPROP_TOOLTIP,   tooltip);
+   }
+   else
+      ObjectSetDouble(0, name, OBJPROP_PRICE, price);
+}
+
+void DrawZoneLines()
+{
+   if(g_LQS_SwingHigh > 0.0)
+      SetHLine(LQS_LINE_SELL, g_LQS_SwingHigh, clrTomato,
+               "LQS SELL zone — spike above + close below");
+   if(g_LQS_SwingLow > 0.0)
+      SetHLine(LQS_LINE_BUY,  g_LQS_SwingLow,  clrDodgerBlue,
+               "LQS BUY zone — spike below + close above");
+}
+
+//===================================================================
 //  INFO PANEL
 //===================================================================
 void DrawInfoPanel()
 {
+   DrawZoneLines();
+
    double ask   = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double bid   = SymbolInfoDouble(Symbol(), SYMBOL_BID);
    datetime sgt = GetSGT();
