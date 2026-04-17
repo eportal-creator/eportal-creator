@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.000)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.100)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.000"
+#property version   "1.100"
 #property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -31,8 +31,8 @@ input double TSstep_ATR_Factor   = 0.4;
 
 input group "=== LQS Settings ==="
 input int    LQS_Lookback        = 20;
-input double LQS_Wick_Min_ATR    = 0.3;
-input double LQS_DI_Spread_Filter = 15.0;
+input double LQS_Wick_Min_ATR    = 0.0;
+input double LQS_DI_Spread_Filter = 0.0;
 input double LQS_M1_DI_Max_Counter = 0.0;
 input double LQS_TP_Fixed        = 0.35;
 
@@ -86,7 +86,7 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.000 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.100 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | LQS_TP_Fixed=", LQS_TP_Fixed,
          " | DI_Max_Counter=", LQS_M1_DI_Max_Counter,
@@ -467,7 +467,7 @@ void DrawInfoPanel()
    else ctrStr = "  [DISABLED]";
 
    string info =
-      "╔══ LQS ZONE SCALPER  v1.000 (MT5) ════╗\n"
+      "╔══ LQS ZONE SCALPER  v1.100 (MT5) ════╗\n"
       "  Symbol    : " + Symbol()                                          + "\n"
       "  Magic     : " + IntegerToString(MagicNumber)                      + "\n"
       "────────────────────────────────────────\n"
