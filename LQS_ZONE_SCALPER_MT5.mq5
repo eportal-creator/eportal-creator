@@ -224,12 +224,14 @@ string BuildNotifyStatus(bool zoneAlert, string zoneSide)
    else if(m1Spread <= -8) m1Dir = "M1 BEAR";
    else                    m1Dir = "M1 NEUTRAL";
 
-   bool sellBlocked = ((g_M1PlusDI  - g_M1MinusDI)  >= LQS_DI_Spread_Filter)
-                   || ((g_M1PlusDI2 - g_M1MinusDI2) >= LQS_DI_Spread_Filter)
+   bool sellBlocked = (LQS_DI_Spread_Filter > 0.0 &&
+                       ((g_M1PlusDI  - g_M1MinusDI)  >= LQS_DI_Spread_Filter ||
+                        (g_M1PlusDI2 - g_M1MinusDI2) >= LQS_DI_Spread_Filter))
                    || (LQS_M1_DI_Max_Counter > 0.0 &&
                        (g_M1PlusDI - g_M1MinusDI) >= LQS_M1_DI_Max_Counter);
-   bool buyBlocked  = ((g_M1MinusDI - g_M1PlusDI)   >= LQS_DI_Spread_Filter)
-                   || ((g_M1MinusDI2 - g_M1PlusDI2) >= LQS_DI_Spread_Filter)
+   bool buyBlocked  = (LQS_DI_Spread_Filter > 0.0 &&
+                       ((g_M1MinusDI - g_M1PlusDI)   >= LQS_DI_Spread_Filter ||
+                        (g_M1MinusDI2 - g_M1PlusDI2) >= LQS_DI_Spread_Filter))
                    || (LQS_M1_DI_Max_Counter > 0.0 &&
                        (g_M1MinusDI - g_M1PlusDI) >= LQS_M1_DI_Max_Counter);
 
