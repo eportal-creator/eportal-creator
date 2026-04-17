@@ -687,35 +687,68 @@ void RefreshLQSLevels()
    g_LQS_SwingLow  = lows [ArrayMinimum(lows)];
 }
 
-// Build a compact status string for push notifications.
+// Build a simple, actionable notification for manual trading.
+// Zone alert: tells user which zone is approaching and what to watch for.
+// Periodic:   shows both zones + distance so user knows where to monitor.
 string BuildNotifyStatus(bool zoneAlert, string zoneSide)
 {
-   double price      = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-   double distSell   = (g_LQS_SwingHigh > 0)   ? g_LQS_SwingHigh - price : 0.0;
-   double distBuy    = (g_LQS_SwingLow  > 0)   ? price - g_LQS_SwingLow  : 0.0;
-   string modeStr    = g_IsTrending ? "MOM" : "REV";
-   string dirStr     = (g_PlusDI > g_MinusDI) ? "BUY" : "SELL";
-   string m1Range    = (g_M1ADX < 25) ? "[RANGE]" : "[TREND]";
+   double price    = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double distSell = (g_LQS_SwingHigh > 0) ? g_LQS_SwingHigh - price : 0.0;
+   double distBuy  = (g_LQS_SwingLow  > 0) ? price - g_LQS_SwingLow  : 0.0;
 
-   string header = zoneAlert
-                   ? ("⚠ ATR ZONE " + zoneSide + " | " + Symbol() + " " + DoubleToString(price, 2))
-                   : ("ATR " + Symbol() + " " + DoubleToString(price, 2) + " | " + modeStr + "-" + dirStr);
+   // H1 mode label (simple)
+   string h1Mode = g_IsTrending ? "H1 TREND" : "H1 RANGE";
 
-   string zones  = "SELL@" + DoubleToString(g_LQS_SwingHigh, 2) + "(+" + DoubleToString(distSell, 1) + ")"
-                 + "  BUY@"  + DoubleToString(g_LQS_SwingLow,  2) + "(-" + DoubleToString(distBuy,  1) + ")";
+   // M1 direction label (simple)
+   string m1Dir;
+   double m1Spread = g_M1PlusDI - g_M1MinusDI;   // positive = bull, negative = bear
+   if     (m1Spread >=  8) m1Dir = "M1 BULL";
+   else if(m1Spread <= -8) m1Dir = "M1 BEAR";
+   else                    m1Dir = "M1 NEUTRAL";
 
-   string h1line = "H1 ADX=" + DoubleToString(g_ADX, 1)
-                 + " +DI="   + DoubleToString(g_PlusDI,  1)
-                 + " -DI="   + DoubleToString(g_MinusDI, 1)
-                 + " gap="   + DoubleToString(MathAbs(g_PlusDI - g_MinusDI), 1);
+   // Would the EA actually trade this zone? (LQS filter check)
+   // Blocked if M1 DI counter-directional (v2.27 LQS_M1_DI_Align)
+   // or M1 spread >= LQS_DI_Spread_Filter (v2.25/v2.26)
+   bool sellBlocked = (g_M1PlusDI > g_M1MinusDI)
+                   || ((g_M1PlusDI  - g_M1MinusDI)  >= LQS_DI_Spread_Filter)
+                   || ((g_M1PlusDI2 - g_M1MinusDI2) >= LQS_DI_Spread_Filter);
+   bool buyBlocked  = (g_M1MinusDI > g_M1PlusDI)
+                   || ((g_M1MinusDI - g_M1PlusDI)   >= LQS_DI_Spread_Filter)
+                   || ((g_M1MinusDI2 - g_M1PlusDI2) >= LQS_DI_Spread_Filter);
 
-   string m1line = "M1 ADX=" + DoubleToString(g_M1ADX, 1)
-                 + " +DI="   + DoubleToString(g_M1PlusDI, 1)
-                 + " -DI="   + DoubleToString(g_M1MinusDI, 1)
-                 + " " + m1Range
-                 + "  ATR="  + DoubleToString(g_ATR, 2);
+   string msg = "";
 
-   return header + "\n" + zones + "\n" + h1line + "\n" + m1line;
+   if(zoneAlert)
+   {
+      bool isBuy = (zoneSide == "BUY");
+      double zonePrice = isBuy ? g_LQS_SwingLow : g_LQS_SwingHigh;
+      double dist      = isBuy ? distBuy : distSell;
+      bool   blocked   = isBuy ? buyBlocked : sellBlocked;
+      string action    = isBuy
+                         ? "Spike BELOW " + DoubleToString(zonePrice, 2) + " then close ABOVE → BUY"
+                         : "Spike ABOVE " + DoubleToString(zonePrice, 2) + " then close BELOW → SELL";
+
+      msg = "XAUUSD " + DoubleToString(price, 2) + " | " + zoneSide + " ZONE $"
+            + DoubleToString(dist, 1) + " away\n"
+            + action + "\n"
+            + h1Mode + " | " + m1Dir + " | ATR=" + DoubleToString(g_ATR, 2) + "\n"
+            + (blocked ? "EA: BLOCKED (manual trade only)" : "EA: will auto-trade if sweep fires");
+   }
+   else
+   {
+      // Periodic update — show both zones clearly
+      msg = "XAUUSD " + DoubleToString(price, 2) + " | " + h1Mode + " | " + m1Dir + "\n"
+            + "SELL zone: " + DoubleToString(g_LQS_SwingHigh, 2)
+            + "  (price +" + DoubleToString(distSell, 1) + " away)\n"
+            + "  → spike above + close below = SELL\n"
+            + "BUY  zone: " + DoubleToString(g_LQS_SwingLow, 2)
+            + "  (price -" + DoubleToString(distBuy, 1) + " away)\n"
+            + "  → spike below + close above = BUY\n"
+            + "ATR=" + DoubleToString(g_ATR, 2)
+            + (sellBlocked ? "  [SELL EA-blocked]" : "")
+            + (buyBlocked  ? "  [BUY EA-blocked]"  : "");
+   }
+   return msg;
 }
 
 // Periodic status notification (fires from OnTimer every Notify_Interval_Min).
