@@ -1,22 +1,23 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.170)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.180)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //|                                                                  |
-//| v1.170: LQS_TP_ATR_Factor — dynamic ATR-based TP               |
-//|  TP = ATR × LQS_TP_ATR_Factor. Scales with volatility so the   |
-//|  R:R ratio stays consistent regardless of market conditions.    |
-//|  At 1.0×ATR TP vs 1.5×ATR SL: breakeven = 60% win rate.       |
-//|  At 1.0×ATR TP vs 2.0×ATR SL: breakeven = 67% win rate.       |
-//|  Set LQS_TP_ATR_Factor=0 to fall back to LQS_TP_Fixed ($).     |
+//| v1.180: LQS_HTF_DI_Align — M5 trend direction filter           |
+//|  Blocks SELL sweeps when M5 +DI > -DI (M5 is bullish).         |
+//|  Blocks BUY  sweeps when M5 -DI > +DI (M5 is bearish).         |
+//|  Fixes the March problem: all-SELL during a gold bull run.      |
+//|  M5 DI reflects a 25-bar trend window — stable enough to filter |
+//|  direction without being as noisy as M1 DI.                     |
 //|                                                                  |
+//| v1.170: LQS_TP_ATR_Factor — dynamic ATR-based TP               |
 //| v1.160: DI-align + bar-range entry quality filters              |
 //| v1.150: CloseBack + BodyDirection sweep-quality filters         |
 //| v1.140: LQS_Trend_Only filter                                   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.170"
-#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | ATR-based TP"
+#property version   "1.180"
+#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | M5 trend filter"
 
 #include <Trade\Trade.mqh>
 
@@ -74,6 +75,12 @@ input bool   LQS_M1_DI_Align        = true;
 // e.g. a strong bull bar that barely poked above swing with DI still bullish.
 // Set false to disable (original behaviour).
 input double LQS_Bar_Range_Min_ATR  = 0.0;
+input bool   LQS_HTF_DI_Align       = true;
+// Block signal when M5 trend opposes the sweep direction.
+// SELL blocked when M5 +DI > -DI (M5 bullish — don't sell into strength).
+// BUY  blocked when M5 -DI > +DI (M5 bearish — don't buy into weakness).
+// Fixes trading against a clear higher-timeframe trend (e.g. all-SELL
+// during a bull market). Set false to disable.
 // Minimum sweep bar total range (H-L) as a fraction of ATR.
 // e.g. 0.5 = bar[1] range must be >= 0.5×ATR ($1.00+ at ATR=$2).
 // Filters 1-tick-poke sweeps with no real volatility or momentum.
@@ -110,6 +117,7 @@ double   g_LQS_SwingLow  = 0.0;
 
 int ATR_Handle   = INVALID_HANDLE;
 int M1ADX_Handle = INVALID_HANDLE;
+int M5ADX_Handle = INVALID_HANDLE;
 
 double g_ATR        = 0.0;
 double g_M1ADX      = 0.0;
@@ -117,6 +125,8 @@ double g_M1PlusDI   = 0.0;
 double g_M1MinusDI  = 0.0;
 double g_M1PlusDI2  = 0.0;
 double g_M1MinusDI2 = 0.0;
+double g_M5PlusDI   = 0.0;
+double g_M5MinusDI  = 0.0;
 bool   g_IsNewBar   = false;
 
 //===================================================================
@@ -130,6 +140,9 @@ int OnInit()
    M1ADX_Handle = iADX(Symbol(), PERIOD_M1, 14);
    if(M1ADX_Handle == INVALID_HANDLE) { Print("ERROR: M1 ADX handle failed."); return INIT_FAILED; }
 
+   M5ADX_Handle = iADX(Symbol(), PERIOD_M5, 14);
+   if(M5ADX_Handle == INVALID_HANDLE) { Print("ERROR: M5 ADX handle failed."); return INIT_FAILED; }
+
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(50);
    trade.SetTypeFilling(GetFillType());
@@ -137,7 +150,7 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.170 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.180 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | TP=", (LQS_TP_ATR_Factor > 0.0
                     ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
@@ -145,6 +158,7 @@ int OnInit()
          " | DI_Align=", LQS_M1_DI_Align,
          " | BarRange=", LQS_Bar_Range_Min_ATR, "xATR",
          " | TrendOnly=", LQS_Trend_Only,
+         " | HTF_DI_Align=", LQS_HTF_DI_Align,
          " | RangingThresh=M1ADX<", M1_Ranging_Threshold);
 
    if(Enable_Notify && Notify_Interval_Min > 0)
@@ -158,6 +172,7 @@ void OnDeinit(const int reason)
    EventKillTimer();
    if(ATR_Handle   != INVALID_HANDLE) IndicatorRelease(ATR_Handle);
    if(M1ADX_Handle != INVALID_HANDLE) IndicatorRelease(M1ADX_Handle);
+   if(M5ADX_Handle != INVALID_HANDLE) IndicatorRelease(M5ADX_Handle);
    ObjectDelete(0, LQS_LINE_SELL);
    ObjectDelete(0, LQS_LINE_BUY);
    Comment("");
@@ -209,6 +224,13 @@ void RefreshM1ADX()
    g_M1MinusDI  = (CopyBuffer(M1ADX_Handle, 2, 1, 1, buf) >= 1) ? buf[0] : 0.0;
    g_M1PlusDI2  = (CopyBuffer(M1ADX_Handle, 1, 2, 1, buf) >= 1) ? buf[0] : 0.0;
    g_M1MinusDI2 = (CopyBuffer(M1ADX_Handle, 2, 2, 1, buf) >= 1) ? buf[0] : 0.0;
+}
+
+void RefreshM5DI()
+{
+   double buf[]; ArraySetAsSeries(buf, true);
+   g_M5PlusDI  = (CopyBuffer(M5ADX_Handle, 1, 1, 1, buf) >= 1) ? buf[0] : 0.0;
+   g_M5MinusDI = (CopyBuffer(M5ADX_Handle, 2, 1, 1, buf) >= 1) ? buf[0] : 0.0;
 }
 
 void RefreshLQSLevels()
@@ -459,6 +481,16 @@ void TryLQSTrade()
       if(lqsBuy  && g_M1MinusDI > g_M1PlusDI)  return;   // M1 still bearish — skip buy
    }
 
+   // ── M5 higher-timeframe trend filter (v1.180) ─────────────────
+   // Block sweep when M5 DI trend opposes the trade direction.
+   // SELL blocked when M5 is bullish (+DI > -DI): don't sell into strength.
+   // BUY  blocked when M5 is bearish (-DI > +DI): don't buy into weakness.
+   if(LQS_HTF_DI_Align)
+   {
+      if(lqsSell && g_M5PlusDI  > g_M5MinusDI) return;
+      if(lqsBuy  && g_M5MinusDI > g_M5PlusDI)  return;
+   }
+
    // ── Sweep bar minimum range filter (v1.160) ───────────────────
    // Bar[1] total range (H-L) must be at least N×ATR.
    // Filters minimal-volatility pokes with no institutional footprint.
@@ -623,7 +655,7 @@ void DrawInfoPanel()
    else ctrStr = "  [DISABLED]";
 
    string info =
-      "╔══ LQS ZONE SCALPER  v1.170 (MT5) ════╗\n"
+      "╔══ LQS ZONE SCALPER  v1.180 (MT5) ════╗\n"
       "  Symbol    : " + Symbol()                                          + "\n"
       "  Magic     : " + IntegerToString(MagicNumber)                      + "\n"
       "────────────────────────────────────────\n"
@@ -643,6 +675,13 @@ void DrawInfoPanel()
       "  M1 DI(2)  : +" + DoubleToString(g_M1PlusDI2,  1)
                      + " / -" + DoubleToString(g_M1MinusDI2, 1)
                      + "  [pre-sweep]"                                     + "\n"
+      "  M5 DI     : +" + DoubleToString(g_M5PlusDI,  1)
+                     + " / -" + DoubleToString(g_M5MinusDI, 1)
+                     + (LQS_HTF_DI_Align
+                        ? (g_M5PlusDI > g_M5MinusDI ? "  [M5 BULL: SELL blocked]"
+                          : g_M5MinusDI > g_M5PlusDI ? "  [M5 BEAR: BUY blocked]"
+                          :                             "  [M5 NEUTRAL: both OK]")
+                        : "  [HTF filter OFF]")                            + "\n"
       "────────────────────────────────────────\n"
       "  LQS lb    : " + IntegerToString(LQS_Lookback) + " bars"          + "\n"
       "  SELL zone : " + DoubleToString(g_LQS_SwingHigh, 2)
@@ -687,6 +726,7 @@ void OnTick()
 {
    g_ATR      = GetATR();
    RefreshM1ADX();
+   RefreshM5DI();
    g_IsNewBar = IsNewBar();
 
    if(g_IsNewBar)

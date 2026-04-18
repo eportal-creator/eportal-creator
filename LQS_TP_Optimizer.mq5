@@ -5,12 +5,12 @@
 //|  filters as LQS_ZONE_SCALPER_MT5.mq5, then simulates each trade  |
 //|  at 8 TP levels to find the optimal TP setting.                  |
 //|                                                                  |
-//|  v1.40 changes:                                                  |
-//|  - TP_Use_ATR_Factor: switch TP mode to ATR multiples, matching  |
-//|    LQS_TP_ATR_Factor in EA v1.170. Levels tested: 0.50, 0.75,   |
-//|    1.00, 1.25, 1.50, 1.75, 2.00, 2.50×ATR.                     |
-//|  - Fixed-dollar mode (TP_Use_ATR_Factor=false) unchanged.        |
+//|  v1.50 changes:                                                  |
+//|  - LQS_HTF_DI_Align: M5 DI trend filter. Block SELL when M5     |
+//|    +DI > -DI (bull), block BUY when M5 -DI > +DI (bear).       |
+//|    Matches LQS_HTF_DI_Align in EA v1.180.                       |
 //|                                                                  |
+//|  v1.40: TP_Use_ATR_Factor — ATR-multiple TP mode (EA v1.170)   |
 //|  v1.30: LQS_Bar_Range_Min_ATR filter (EA v1.160)                |
 //|  v1.20: CloseBack + BodyDirection filters (EA v1.150)            |
 //|  v1.10: Fixed-dollar TP levels + TrendOnly                       |
@@ -27,8 +27,8 @@
 //+------------------------------------------------------------------+
 #property script_show_inputs
 #property copyright "Project ATR"
-#property version   "1.40"
-#property description "LQS TP Optimizer v1.40 — ATR-factor TP mode + all EA v1.170 filters"
+#property version   "1.50"
+#property description "LQS TP Optimizer v1.50 — M5 HTF trend filter + all EA v1.180 filters"
 
 input group "=== Date Range ==="
 input datetime DateFrom              = D'2026.04.13 00:00';
@@ -66,6 +66,11 @@ input double   LQS_Bar_Range_Min_ATR = 0.0;
 // Minimum sweep bar total range (H-L) as a fraction of ATR.
 // e.g. 0.5 = bar[1] range must be >= 0.5×ATR. Filters minimal-poke bars.
 // Matches LQS_Bar_Range_Min_ATR in EA v1.160. Set 0 to disable.
+
+input bool     LQS_HTF_DI_Align      = true;
+// Block SELL when M5 +DI > -DI (M5 bullish — don't sell into bull trend).
+// Block BUY  when M5 -DI > +DI (M5 bearish — don't buy into bear trend).
+// Matches LQS_HTF_DI_Align in EA v1.180. Set false to disable.
 
 input group "=== Trade / EA Settings (match EA) ==="
 input int      ATR_Period            = 14;
@@ -135,30 +140,45 @@ void OnStart()
    int atrH = iATR(Symbol(), PERIOD_M1, ATR_Period);
    if(atrH == INVALID_HANDLE) { Print("ERROR: iATR handle failed"); return; }
 
-   //--- ADX indicator (buffer 0=ADX, 1=+DI, 2=-DI)
+   //--- M1 ADX indicator (buffer 0=ADX, 1=+DI, 2=-DI)
    int adxH = iADX(Symbol(), PERIOD_M1, ATR_Period);
    if(adxH == INVALID_HANDLE)
    { Print("ERROR: iADX handle failed"); IndicatorRelease(atrH); return; }
 
+   //--- M5 ADX for HTF trend filter
+   int m5adxH = iADX(Symbol(), PERIOD_M5, 14);
+   if(m5adxH == INVALID_HANDLE)
+   { Print("ERROR: M5 iADX handle failed"); IndicatorRelease(atrH); IndicatorRelease(adxH); return; }
+
+   int m5CopyCount = (copyCount / 5) + 200;
+
    //--- Wait for indicator data
    int waits = 0;
-   while((BarsCalculated(atrH) < copyCount || BarsCalculated(adxH) < copyCount) && waits < 200)
+   while((BarsCalculated(atrH)   < copyCount   ||
+          BarsCalculated(adxH)   < copyCount   ||
+          BarsCalculated(m5adxH) < m5CopyCount) && waits < 300)
    { Sleep(50); waits++; }
 
    double atrBuf[], adxBuf[], plusDI[], minusDI[];
-   ArraySetAsSeries(atrBuf,  true);
-   ArraySetAsSeries(adxBuf,  true);
-   ArraySetAsSeries(plusDI,  true);
-   ArraySetAsSeries(minusDI, true);
+   double m5PlusDI[], m5MinusDI[];
+   ArraySetAsSeries(atrBuf,    true);
+   ArraySetAsSeries(adxBuf,    true);
+   ArraySetAsSeries(plusDI,    true);
+   ArraySetAsSeries(minusDI,   true);
+   ArraySetAsSeries(m5PlusDI,  true);
+   ArraySetAsSeries(m5MinusDI, true);
 
    bool bufOK =
-      (CopyBuffer(atrH, 0, 0, copyCount, atrBuf)  >= copyCount) &&
-      (CopyBuffer(adxH, 0, 0, copyCount, adxBuf)  >= copyCount) &&
-      (CopyBuffer(adxH, 1, 0, copyCount, plusDI)  >= copyCount) &&
-      (CopyBuffer(adxH, 2, 0, copyCount, minusDI) >= copyCount);
+      (CopyBuffer(atrH,   0, 0, copyCount,   atrBuf)    >= copyCount)   &&
+      (CopyBuffer(adxH,   0, 0, copyCount,   adxBuf)    >= copyCount)   &&
+      (CopyBuffer(adxH,   1, 0, copyCount,   plusDI)    >= copyCount)   &&
+      (CopyBuffer(adxH,   2, 0, copyCount,   minusDI)   >= copyCount)   &&
+      (CopyBuffer(m5adxH, 1, 0, m5CopyCount, m5PlusDI)  >= m5CopyCount) &&
+      (CopyBuffer(m5adxH, 2, 0, m5CopyCount, m5MinusDI) >= m5CopyCount);
 
    IndicatorRelease(atrH);
    IndicatorRelease(adxH);
+   IndicatorRelease(m5adxH);
 
    if(!bufOK) { Print("ERROR: indicator buffer copy failed"); return; }
 
@@ -260,6 +280,17 @@ void OnStart()
       {
          if(lqsBuy  && minusDI[i] > plusDI[i]) continue;   // M1 bearish on sweep bar
          if(lqsSell && plusDI[i]  > minusDI[i]) continue;  // M1 bullish on sweep bar
+      }
+
+      //--- M5 HTF trend filter (v1.180): block when M5 DI opposes signal
+      if(LQS_HTF_DI_Align)
+      {
+         int m5shift = iBarShift(Symbol(), PERIOD_M5, t[i], false);
+         if(m5shift >= 0 && m5shift < m5CopyCount)
+         {
+            if(lqsSell && m5PlusDI[m5shift]  > m5MinusDI[m5shift]) continue;
+            if(lqsBuy  && m5MinusDI[m5shift] > m5PlusDI[m5shift])  continue;
+         }
       }
 
       //--- Trend-only filter (matches LQS_Trend_Only in EA v1.140)
