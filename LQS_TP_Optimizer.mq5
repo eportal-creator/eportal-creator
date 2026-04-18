@@ -1,15 +1,17 @@
 //+------------------------------------------------------------------+
-//|                  LQS_TP_Optimizer.mq5               v1.30        |
+//|                  LQS_TP_Optimizer.mq5               v1.40        |
 //|                                                                  |
 //|  Replays LQS signal detection over a date range using the same   |
 //|  filters as LQS_ZONE_SCALPER_MT5.mq5, then simulates each trade  |
 //|  at 8 TP levels to find the optimal TP setting.                  |
 //|                                                                  |
-//|  v1.30 changes:                                                  |
-//|  - LQS_Bar_Range_Min_ATR: sweep bar total range (H-L) must be   |
-//|    at least N×ATR. Filters minimal-poke sweeps with no momentum. |
-//|    Matches new v1.160 filter in LQS_ZONE_SCALPER_MT5.mq5.       |
+//|  v1.40 changes:                                                  |
+//|  - TP_Use_ATR_Factor: switch TP mode to ATR multiples, matching  |
+//|    LQS_TP_ATR_Factor in EA v1.170. Levels tested: 0.50, 0.75,   |
+//|    1.00, 1.25, 1.50, 1.75, 2.00, 2.50×ATR.                     |
+//|  - Fixed-dollar mode (TP_Use_ATR_Factor=false) unchanged.        |
 //|                                                                  |
+//|  v1.30: LQS_Bar_Range_Min_ATR filter (EA v1.160)                |
 //|  v1.20: CloseBack + BodyDirection filters (EA v1.150)            |
 //|  v1.10: Fixed-dollar TP levels + TrendOnly                       |
 //|                                                                  |
@@ -17,15 +19,16 @@
 //|  1. Attach to XAUUSD M1 chart                                    |
 //|  2. Set DateFrom / DateTo to the period you want to analyse      |
 //|  3. Match all inputs to your LQS EA's current settings           |
-//|  4. Run — output appears in the Experts / Journal tab            |
+//|  4. Set TP_Use_ATR_Factor=true to test ATR-based TP (EA v1.170) |
+//|  5. Run — output appears in the Experts / Journal tab            |
 //|                                                                  |
 //|  SL simulation rule: if both SL and TP hit on the same M1 bar,  |
 //|  bar close direction is used as tiebreaker.                      |
 //+------------------------------------------------------------------+
 #property script_show_inputs
 #property copyright "Project ATR"
-#property version   "1.30"
-#property description "LQS TP Optimizer v1.30 — DI-align + bar-range + close-back + body-dir filters"
+#property version   "1.40"
+#property description "LQS TP Optimizer v1.40 — ATR-factor TP mode + all EA v1.170 filters"
 
 input group "=== Date Range ==="
 input datetime DateFrom              = D'2026.04.13 00:00';
@@ -76,17 +79,24 @@ input double   ExpireHours           = 0.5;    // Max bars forward before forced
 input double   LotSize               = 0.01;   // Lot size (for $ P&L calculation)
 
 input group "=== TP Testing ==="
-input double   LQS_TP_Current        = 0.35;
-// Your current LQS_TP_Fixed value — marked with ◄ CURRENT in output.
-// NOTE: TP levels are FIXED DOLLAR AMOUNTS (matching LQS_TP_Fixed in EA).
+input bool     TP_Use_ATR_Factor     = true;
+// true  = test ATR multiples (matches LQS_TP_ATR_Factor in EA v1.170).
+//         Levels: 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.50×ATR.
+// false = test fixed dollar amounts (matches LQS_TP_Fixed in EA).
+//         Levels: $0.20, $0.35, $0.50, $0.75, $1.00, $1.50, $2.00, $3.00.
+input double   LQS_TP_Current        = 1.0;
+// Your current TP setting — marked with ◄ CURRENT in output.
+// In ATR mode: your LQS_TP_ATR_Factor value (e.g. 1.0).
+// In fixed mode: your LQS_TP_Fixed value (e.g. 0.35).
 
 input group "=== Output ==="
 input bool     LogEachSignal         = true;
 // Print one line per detected signal (time, side, ATR, SL, MFE/result).
 
-//--- Fixed-dollar TP levels to test
+//--- TP level arrays (one mode active at runtime)
 #define N_TP 8
-static const double TP_LEVELS[N_TP] = { 0.20, 0.35, 0.50, 0.75, 1.00, 1.50, 2.00, 3.00 };
+static const double TP_LEVELS_ATR[N_TP]   = { 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.50 };
+static const double TP_LEVELS_FIXED[N_TP] = { 0.20, 0.35, 0.50, 0.75, 1.00, 1.50, 2.00, 3.00 };
 
 //+------------------------------------------------------------------+
 void OnStart()
@@ -280,10 +290,12 @@ void OnStart()
                (isSell ? "SELL" : "BUY"),
                atr, slMult, (m1Rang ? "RNG" : "TRD"), slDist, maxFavE));
 
-      //--- Simulate at each TP level (fixed dollar, matches LQS_TP_Fixed in EA)
+      //--- Simulate at each TP level
       for(int tp = 0; tp < N_TP; tp++)
       {
-         double tpDist = TP_LEVELS[tp];   // fixed dollar amount
+         double tpDist = TP_Use_ATR_Factor
+                         ? atr * TP_LEVELS_ATR[tp]    // ATR multiple (EA v1.170)
+                         : TP_LEVELS_FIXED[tp];        // fixed dollar (EA legacy)
          bool   hit    = false;
          bool   isWin  = false;
 
@@ -344,30 +356,42 @@ void OnStart()
    Print("  Signals : ", signals,
          "   SL=", DoubleToString(SL_ATR_Factor, 1), "/",
                    DoubleToString(SL_ATR_Ranging, 1), "×ATR",
+         "   TP=", (TP_Use_ATR_Factor ? "ATR×factor" : "fixed$"),
          "   TrendOnly=", LQS_Trend_Only,
          "   Lookback=", LQS_Lookback,
          "   Expire=",   DoubleToString(ExpireHours * 60, 0), "min");
-   Print("  NOTE: TP levels are FIXED DOLLAR amounts (matches LQS_TP_Fixed in EA v1.160).");
+   string tpModeNote = TP_Use_ATR_Factor
+      ? "  NOTE: TP levels are ATR MULTIPLES (matches LQS_TP_ATR_Factor in EA v1.170)."
+      : "  NOTE: TP levels are FIXED DOLLAR amounts (matches LQS_TP_Fixed in EA v1.170).";
+   Print(tpModeNote);
    Print(sep);
+   string tpHdr = TP_Use_ATR_Factor ? "TP×ATR" : "TP $  ";
    Print(StringFormat("  %-6s | %4s | %4s | %4s | %6s | %8s | %s",
-         "TP $","Wins","Loss","Exp","WinRate","Net P&L","Avg MFE"));
+         tpHdr,"Wins","Loss","Exp","WinRate","Net P&L","Avg MFE"));
    Print(sep);
 
    for(int tp = 0; tp < N_TP; tp++)
    {
-      int    total = wins[tp] + losses[tp] + expired_c[tp];
-      double wr    = (total > 0) ? 100.0 * wins[tp] / total : 0.0;
-      double avgMFE= (signals > 0) ? mfe[tp] / signals : 0.0;
-      string mark  = (MathAbs(TP_LEVELS[tp] - LQS_TP_Current) < 0.001) ? "  ◄ CURRENT" : "";
+      int    total  = wins[tp] + losses[tp] + expired_c[tp];
+      double wr     = (total > 0) ? 100.0 * wins[tp] / total : 0.0;
+      double avgMFE = (signals > 0) ? mfe[tp] / signals : 0.0;
+      double level  = TP_Use_ATR_Factor ? TP_LEVELS_ATR[tp] : TP_LEVELS_FIXED[tp];
+      string mark   = (MathAbs(level - LQS_TP_Current) < 0.001) ? "  ◄ CURRENT" : "";
+      string tpStr  = TP_Use_ATR_Factor
+                      ? StringFormat("%.2fx", level)
+                      : StringFormat("$%.2f", level);
 
-      Print(StringFormat("  $%-5.2f | %4d | %4d | %4d | %5.1f%% | $%7.2f | %.2f%s",
-            TP_LEVELS[tp],
+      Print(StringFormat("  %-6s | %4d | %4d | %4d | %5.1f%% | $%7.2f | %.2f%s",
+            tpStr,
             wins[tp], losses[tp], expired_c[tp],
             wr, pnl[tp], avgMFE, mark));
    }
    Print(sep);
-   Print("  Avg MFE = average max favourable excursion per signal (in $).");
-   Print("  TP levels are fixed $ — any level above Avg MFE will often not be reached.");
+   Print("  Avg MFE = average max favourable excursion per signal (in price $).");
+   string footer = TP_Use_ATR_Factor
+      ? "  ATR mode: Avg MFE / Avg ATR gives typical achievable ATR multiple per signal."
+      : "  Fixed mode: any TP level above Avg MFE will often not be reached.";
+   Print(footer);
    Print("══════════════════════════════════════════════════════════");
 }
 //+------------------------------------------------------------------+

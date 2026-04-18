@@ -1,24 +1,22 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.160)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.170)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //|                                                                  |
-//| v1.160: Two additional entry-quality filters                    |
-//|  A) LQS_M1_DI_Align: sweep bar's M1 DI must agree with signal  |
-//|     direction. SELL: -DI >= +DI on bar[1]. BUY: +DI >= -DI.   |
-//|     Blocks sweeps where M1 momentum is still running against    |
-//|     the trade — e.g. strong bull bar that barely poked above    |
-//|     swing high with DI still bullish. Syncs with optimizer.     |
-//|  B) LQS_Bar_Range_Min_ATR: sweep bar total range (H-L) must    |
-//|     be at least N×ATR. Filters 1-tick-poke bars that have no   |
-//|     real volatility or institutional footprint behind them.     |
+//| v1.170: LQS_TP_ATR_Factor — dynamic ATR-based TP               |
+//|  TP = ATR × LQS_TP_ATR_Factor. Scales with volatility so the   |
+//|  R:R ratio stays consistent regardless of market conditions.    |
+//|  At 1.0×ATR TP vs 1.5×ATR SL: breakeven = 60% win rate.       |
+//|  At 1.0×ATR TP vs 2.0×ATR SL: breakeven = 67% win rate.       |
+//|  Set LQS_TP_ATR_Factor=0 to fall back to LQS_TP_Fixed ($).     |
 //|                                                                  |
+//| v1.160: DI-align + bar-range entry quality filters              |
 //| v1.150: CloseBack + BodyDirection sweep-quality filters         |
 //| v1.140: LQS_Trend_Only filter                                   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.160"
-#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | DI-align+BarRange filters"
+#property version   "1.170"
+#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | ATR-based TP"
 
 #include <Trade\Trade.mqh>
 
@@ -80,7 +78,14 @@ input double LQS_Bar_Range_Min_ATR  = 0.0;
 // e.g. 0.5 = bar[1] range must be >= 0.5×ATR ($1.00+ at ATR=$2).
 // Filters 1-tick-poke sweeps with no real volatility or momentum.
 // 0 = disabled. Suggested starting value: 0.5.
+input double LQS_TP_ATR_Factor   = 1.0;
+// Dynamic TP: TP = ATR × LQS_TP_ATR_Factor.
+// Scales with volatility — keeps R:R consistent across market conditions.
+// At 1.0×ATR TP vs SL=1.5×ATR: need 60% win rate to break even.
+// At 1.0×ATR TP vs SL=2.0×ATR: need 67% win rate to break even.
+// Set 0 to disable and use LQS_TP_Fixed (fixed dollar) instead.
 input double LQS_TP_Fixed        = 0.35;
+// Fixed dollar TP. Only used when LQS_TP_ATR_Factor = 0.
 
 input group "=== Session Filter (SGT auto-detected) ==="
 input bool   EnableSessionFilter = true;
@@ -132,14 +137,14 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.160 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.170 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
-         " | LQS_TP_Fixed=", LQS_TP_Fixed,
-         " | DI_Max_Counter=", LQS_M1_DI_Max_Counter,
-         " | DI_Spread_Filter=", LQS_DI_Spread_Filter,
-         " | TrendOnly=", LQS_Trend_Only,
+         " | TP=", (LQS_TP_ATR_Factor > 0.0
+                    ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
+                    : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]"),
          " | DI_Align=", LQS_M1_DI_Align,
          " | BarRange=", LQS_Bar_Range_Min_ATR, "xATR",
+         " | TrendOnly=", LQS_Trend_Only,
          " | RangingThresh=M1ADX<", M1_Ranging_Threshold);
 
    if(Enable_Notify && Notify_Interval_Min > 0)
@@ -486,7 +491,7 @@ void TryLQSTrade()
 
    double slMult      = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
    double slDist      = g_ATR * slMult;
-   double tpDist      = LQS_TP_Fixed;
+   double tpDist      = (LQS_TP_ATR_Factor > 0.0) ? g_ATR * LQS_TP_ATR_Factor : LQS_TP_Fixed;
 
    double sl, tp;
    if(dir == ORDER_TYPE_BUY)
@@ -618,7 +623,7 @@ void DrawInfoPanel()
    else ctrStr = "  [DISABLED]";
 
    string info =
-      "╔══ LQS ZONE SCALPER  v1.160 (MT5) ════╗\n"
+      "╔══ LQS ZONE SCALPER  v1.170 (MT5) ════╗\n"
       "  Symbol    : " + Symbol()                                          + "\n"
       "  Magic     : " + IntegerToString(MagicNumber)                      + "\n"
       "────────────────────────────────────────\n"
@@ -644,9 +649,10 @@ void DrawInfoPanel()
                      + "  (price +" + DoubleToString(distSell, 1) + ")"   + "\n"
       "  BUY  zone : " + DoubleToString(g_LQS_SwingLow, 2)
                      + "  (price -" + DoubleToString(distBuy, 1) + ")"    + "\n"
-      "  TP fixed  : " + (LQS_TP_Fixed > 0.0
-                          ? DoubleToString(LQS_TP_Fixed, 2) + " (fixed)"
-                          : "OFF (trailing only)")                         + "\n"
+      "  TP mode   : " + (LQS_TP_ATR_Factor > 0.0
+                          ? DoubleToString(LQS_TP_ATR_Factor, 2) + "×ATR = $"
+                            + DoubleToString(g_ATR * LQS_TP_ATR_Factor, 2) + " [dynamic]"
+                          : "$" + DoubleToString(LQS_TP_Fixed, 2) + " [fixed]") + "\n"
       "  DI spread : thr=" + DoubleToString(LQS_DI_Spread_Filter, 1)
                      + (((g_M1PlusDI  - g_M1MinusDI)  >= LQS_DI_Spread_Filter ||
                          (g_M1PlusDI2 - g_M1MinusDI2) >= LQS_DI_Spread_Filter) ? "  [SELL BLK]"
