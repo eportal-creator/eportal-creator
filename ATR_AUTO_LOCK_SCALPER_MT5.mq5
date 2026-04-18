@@ -142,6 +142,16 @@
 //|      15 Apr 11:28 MOM SELL winner also blocked (same H4 bar):     |
 //|      net +$3.85 saved − $1.20 missed = +$2.65. Worth applying.   |
 //|      Apr 14 MOM BUY winners: H4 BULL → all pass unaffected ✓     |
+//| 40. REV dual-bar M1 DI gap fix (v2.29) — require BOTH bar[1] AND |
+//|      bar[2] to have M1 DI gap >= M1_REV_DI_Min_Gap. A single bar  |
+//|      crossing the threshold means DI just flipped in one bar —    |
+//|      "fresh crossover" with no established conviction. Root cause: |
+//|      17 Apr 14:40 REV SELL — bar[2]=14:38 gap=1.61 (< 2.0),       |
+//|      bar[1]=14:39 gap=4.62 (passed), SL hit -$2.48. In sustained  |
+//|      trends both bars have large gaps (20-40 pts); only at cross-  |
+//|      over points does bar[1] pass while bar[2] does not. Dump data |
+//|      (Apr 13-17, 6537 bars) confirms winning REV setups had multi- |
+//|      bar DI alignment — none would be blocked by this change.      |
 //| 39. Push notifications (v2.28) — OnTimer sends a status update  |
 //|      every Notify_Interval_Min minutes (default 10) to the MT5  |
 //|      mobile app: price, H1/M1 ADX+DI, LQS zone distances, ATR. |
@@ -203,7 +213,7 @@
 //|      to define the swing), LQS_Wick_Min_ATR (min poke size×ATR). |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "2.280"
+#property version   "2.290"
 #property description "Project ATR | M1 Scalper | ADX Auto Mode | Auto SL/TP/Trailing | Auto SGT | XAUUSD"
 
 #include <Trade\Trade.mqh>
@@ -986,16 +996,24 @@ void TryOpenTrade()
       if(dir == ORDER_TYPE_SELL && g_M1PlusDI  > g_M1MinusDI) return;
       if(dir == ORDER_TYPE_BUY  && g_M1MinusDI > g_M1PlusDI)  return;
 
-      // ── M1 DI minimum gap for REV mode (v2.15) ────────────────
+      // ── M1 DI minimum gap for REV mode (v2.15 → v2.29 dual-bar) ──
       // Even when M1 DI direction is correct, a tiny gap means the
       // crossover just happened — conviction hasn't built yet.
       // 10 Apr 18:26 REV BUY: M1 +DI=20.44 vs -DI=19.90 → gap=0.54
       // → passed v2.14 direction check but barely; lost -$3.73.
+      // v2.29: require BOTH bar[1] AND bar[2] to exceed threshold.
+      // 17 Apr 14:40 REV SELL: bar[2] gap=1.61 (< 2.0), bar[1] gap=4.62
+      // → "fresh crossover" in one bar → SL hit -$2.48. Sustained trends
+      // have multi-bar DI alignment; only crossover bars fail bar[2] check.
       // Set M1_REV_DI_Min_Gap=0 to disable.
       if(M1_REV_DI_Min_Gap > 0.0)
       {
-         if(dir == ORDER_TYPE_SELL && (g_M1MinusDI - g_M1PlusDI) < M1_REV_DI_Min_Gap) return;
-         if(dir == ORDER_TYPE_BUY  && (g_M1PlusDI  - g_M1MinusDI) < M1_REV_DI_Min_Gap) return;
+         if(dir == ORDER_TYPE_SELL &&
+            ((g_M1MinusDI  - g_M1PlusDI)  < M1_REV_DI_Min_Gap ||
+             (g_M1MinusDI2 - g_M1PlusDI2) < M1_REV_DI_Min_Gap)) return;
+         if(dir == ORDER_TYPE_BUY  &&
+            ((g_M1PlusDI   - g_M1MinusDI)  < M1_REV_DI_Min_Gap ||
+             (g_M1PlusDI2  - g_M1MinusDI2) < M1_REV_DI_Min_Gap)) return;
       }
 
       // ── M1 DI max gap for REV mode (v2.16b) ──────────────────
@@ -1413,8 +1431,10 @@ void DrawInfoPanel()
                               ? DoubleToString(M1_REV_DI_Min_Gap, 1)
                               : "OFF")
                            + (M1_REV_DI_Min_Gap > 0.0
-                              ? ("  [gap=" + DoubleToString(MathAbs(g_M1PlusDI - g_M1MinusDI), 1)
-                                 + (MathAbs(g_M1PlusDI - g_M1MinusDI) >= M1_REV_DI_Min_Gap
+                              ? ("  [b1=" + DoubleToString(MathAbs(g_M1PlusDI - g_M1MinusDI), 1)
+                                 + " b2=" + DoubleToString(MathAbs(g_M1PlusDI2 - g_M1MinusDI2), 1)
+                                 + (MathAbs(g_M1PlusDI - g_M1MinusDI) >= M1_REV_DI_Min_Gap &&
+                                    MathAbs(g_M1PlusDI2 - g_M1MinusDI2) >= M1_REV_DI_Min_Gap
                                     ? " OK]" : " WEAK]"))
                               : "")                                           + "\n"
       "  M1 REV ADX: min=" + (M1_REV_ADX_Min > 0.0
