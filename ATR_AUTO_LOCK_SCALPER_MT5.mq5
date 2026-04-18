@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT ATR  (MT5 v2.14)                      |
+//|                    PROJECT ATR  (MT5 v2.29)                      |
 //|  Converted from MT4 + all unit bugs fixed + XAUUSD optimised    |
 //|                                                                  |
 //|  KEY FIXES vs MT4 version:                                       |
@@ -399,10 +399,10 @@ input double M1_REV_DI_Min_Gap = 2.0;
 // REV mode only: minimum M1 DI gap required in the fade direction.
 // For REV SELL: M1 -DI must exceed +DI by at least this value.
 // For REV BUY:  M1 +DI must exceed -DI by at least this value.
-// Complements v2.14 direction guard: when DI is correct but the gap is
+// Complements v2.29 direction guard: when DI is correct but the gap is
 // tiny, the crossover just happened and M1 momentum hasn't built yet.
 // 10 Apr 18:26 REV BUY: M1 +DI=20.44 vs -DI=19.90 → gap=0.54 — passes
-// v2.14 direction check but barely; price dropped after entry (-$3.73).
+// v2.29 direction check but barely; price dropped after entry (-$3.73).
 // Gap of 2.0 would block any near-crossover entry.
 // Set 0 to disable. Recommended: 2.0.
 
@@ -983,7 +983,7 @@ void TryOpenTrade()
       // Must check ADX quality BEFORE acting on DI direction.
       if(M1_REV_ADX_Min > 0.0 && g_M1ADX < M1_REV_ADX_Min) return;
 
-      // ── M1 DI direction guard for REV mode (v2.14) ────────────
+      // ── M1 DI direction guard for REV mode (v2.29) ────────────
       // Replaces the v2.11 ADX-gated guard. Root cause of 06:31/08:31/
       // 10:04 losses: M1 was bullish (+DI>-DI) but ADX<25 so the guard
       // silently passed. ADX lags — the rally builds before ADX reaches
@@ -996,12 +996,12 @@ void TryOpenTrade()
       if(dir == ORDER_TYPE_SELL && g_M1PlusDI  > g_M1MinusDI) return;
       if(dir == ORDER_TYPE_BUY  && g_M1MinusDI > g_M1PlusDI)  return;
 
-      // ── M1 DI minimum gap for REV mode (v2.15 → v2.29 dual-bar) ──
+      // ── M1 DI minimum gap for REV mode (v2.29 dual-bar) ───────────
       // Even when M1 DI direction is correct, a tiny gap means the
       // crossover just happened — conviction hasn't built yet.
       // 10 Apr 18:26 REV BUY: M1 +DI=20.44 vs -DI=19.90 → gap=0.54
-      // → passed v2.14 direction check but barely; lost -$3.73.
-      // v2.29: require BOTH bar[1] AND bar[2] to exceed threshold.
+      // → passed v2.29 direction check but barely; lost -$3.73.
+      // Require BOTH bar[1] AND bar[2] to exceed threshold.
       // 17 Apr 14:40 REV SELL: bar[2] gap=1.61 (< 2.0), bar[1] gap=4.62
       // → "fresh crossover" in one bar → SL hit -$2.48. Sustained trends
       // have multi-bar DI alignment; only crossover bars fail bar[2] check.
