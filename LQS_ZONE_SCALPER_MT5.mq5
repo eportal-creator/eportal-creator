@@ -36,8 +36,8 @@ input int    CooldownMinutes     = 5;
 
 input group "=== ATR Settings ==="
 input int    ATR_Period          = 14;
-input double ATR_Min_Filter      = 1.0;
-input double ATR_Max_Filter      = 8.0;
+input double ATR_Min_Filter      = 1.6;
+input double ATR_Max_Filter      = 4.0;
 input double SL_ATR_Factor       = 1.5;
 input double SL_ATR_Ranging_Mult = 2.0;
 input double M1_Ranging_Threshold = 25.0;
@@ -49,7 +49,7 @@ input int    LQS_Lookback        = 20;
 input double LQS_Wick_Min_ATR    = 0.0;
 input double LQS_DI_Spread_Filter = 30.0;
 input double LQS_M1_DI_Max_Counter  = 0.0;
-input bool   LQS_Trend_Only         = true;
+input bool   LQS_Trend_Only         = false;
 input double LQS_CloseBack_Min_ATR  = 0.3;
 // Minimum close-back distance as a fraction of ATR.
 // SELL: bar[1] must close at least (N × ATR) below swingHigh.
@@ -85,13 +85,13 @@ input bool   LQS_HTF_DI_Align       = true;
 // e.g. 0.5 = bar[1] range must be >= 0.5×ATR ($1.00+ at ATR=$2).
 // Filters 1-tick-poke sweeps with no real volatility or momentum.
 // 0 = disabled. Suggested starting value: 0.5.
-input double LQS_TP_ATR_Factor   = 1.0;
+input double LQS_TP_ATR_Factor   = 0.0;
 // Dynamic TP: TP = ATR × LQS_TP_ATR_Factor.
 // Scales with volatility — keeps R:R consistent across market conditions.
 // At 1.0×ATR TP vs SL=1.5×ATR: need 60% win rate to break even.
 // At 1.0×ATR TP vs SL=2.0×ATR: need 67% win rate to break even.
 // Set 0 to disable and use LQS_TP_Fixed (fixed dollar) instead.
-input double LQS_TP_Fixed        = 0.35;
+input double LQS_TP_Fixed        = 0.75;
 // Fixed dollar TP. Only used when LQS_TP_ATR_Factor = 0.
 
 input group "=== Session Filter (SGT auto-detected) ==="
