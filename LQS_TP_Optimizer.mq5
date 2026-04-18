@@ -1,17 +1,17 @@
 //+------------------------------------------------------------------+
-//|                  LQS_TP_Optimizer.mq5               v1.10        |
+//|                  LQS_TP_Optimizer.mq5               v1.30        |
 //|                                                                  |
 //|  Replays LQS signal detection over a date range using the same   |
 //|  filters as LQS_ZONE_SCALPER_MT5.mq5, then simulates each trade  |
 //|  at 8 TP levels to find the optimal TP setting.                  |
 //|                                                                  |
-//|  v1.10 changes:                                                  |
-//|  - TP mode: FIXED DOLLAR (matches LQS_TP_Fixed in EA). The      |
-//|    LQS EA uses a fixed $ amount, not an ATR multiple.            |
-//|    TP levels tested: $0.20, $0.35, $0.50, $0.75, $1.00, $1.50, |
-//|    $2.00, $3.00. Mark current with LQS_TP_Current.              |
-//|  - LQS_Trend_Only: skip ranging-mode signals (ADX < threshold). |
-//|    Matches new v1.140 filter in LQS_ZONE_SCALPER_MT5.mq5.       |
+//|  v1.30 changes:                                                  |
+//|  - LQS_Bar_Range_Min_ATR: sweep bar total range (H-L) must be   |
+//|    at least N×ATR. Filters minimal-poke sweeps with no momentum. |
+//|    Matches new v1.160 filter in LQS_ZONE_SCALPER_MT5.mq5.       |
+//|                                                                  |
+//|  v1.20: CloseBack + BodyDirection filters (EA v1.150)            |
+//|  v1.10: Fixed-dollar TP levels + TrendOnly                       |
 //|                                                                  |
 //|  HOW TO USE:                                                     |
 //|  1. Attach to XAUUSD M1 chart                                    |
@@ -24,8 +24,8 @@
 //+------------------------------------------------------------------+
 #property script_show_inputs
 #property copyright "Project ATR"
-#property version   "1.20"
-#property description "LQS TP Optimizer v1.20 — close-back + body-direction filters"
+#property version   "1.30"
+#property description "LQS TP Optimizer v1.30 — DI-align + bar-range + close-back + body-dir filters"
 
 input group "=== Date Range ==="
 input datetime DateFrom              = D'2026.04.13 00:00';
@@ -58,6 +58,11 @@ input bool     LQS_Body_Direction    = true;
 // SELL: bar[1] must close in lower 50% of its range (bearish rejection).
 // BUY:  bar[1] must close in upper 50% of its range (bullish rejection).
 // Set false to disable.
+
+input double   LQS_Bar_Range_Min_ATR = 0.0;
+// Minimum sweep bar total range (H-L) as a fraction of ATR.
+// e.g. 0.5 = bar[1] range must be >= 0.5×ATR. Filters minimal-poke bars.
+// Matches LQS_Bar_Range_Min_ATR in EA v1.160. Set 0 to disable.
 
 input group "=== Trade / EA Settings (match EA) ==="
 input int      ATR_Period            = 14;
@@ -222,6 +227,13 @@ void OnStart()
          if(lqsBuy  && c1 < midPoint) continue;
       }
 
+      //--- Sweep bar minimum range filter (v1.160)
+      if(LQS_Bar_Range_Min_ATR > 0.0)
+      {
+         double barRange = h1 - l1;
+         if(barRange < atr * LQS_Bar_Range_Min_ATR) continue;
+      }
+
       //--- DI spread filter: check bar[1]=i and bar[2]=i+1
       if(LQS_DI_Spread_Filter > 0.0 && i + 1 < copyCount)
       {
@@ -335,7 +347,7 @@ void OnStart()
          "   TrendOnly=", LQS_Trend_Only,
          "   Lookback=", LQS_Lookback,
          "   Expire=",   DoubleToString(ExpireHours * 60, 0), "min");
-   Print("  NOTE: TP levels are FIXED DOLLAR amounts (matches LQS_TP_Fixed in EA).");
+   Print("  NOTE: TP levels are FIXED DOLLAR amounts (matches LQS_TP_Fixed in EA v1.160).");
    Print(sep);
    Print(StringFormat("  %-6s | %4s | %4s | %4s | %6s | %8s | %s",
          "TP $","Wins","Loss","Exp","WinRate","Net P&L","Avg MFE"));

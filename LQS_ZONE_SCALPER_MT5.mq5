@@ -1,25 +1,24 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.150)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.160)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //|                                                                  |
-//| v1.150: Two sweep-quality filters added                         |
-//|  A) LQS_CloseBack_Min_ATR: bar[1] must close at least N×ATR    |
-//|     below swingHigh (SELL) / above swingLow (BUY). Filters bars |
-//|     that barely graze the level and immediately close back —    |
-//|     weak rejections that often reverse again quickly.           |
-//|  B) LQS_Body_Direction: sweep bar must close in the lower half  |
-//|     of its range (SELL) or upper half (BUY). A bar closing at   |
-//|     its high while below the swing level shows continued buying  |
-//|     pressure — not a genuine rejection.                         |
-//|  Both filters target signal quality, not market direction, so   |
-//|  they improve results across trending AND ranging conditions.   |
+//| v1.160: Two additional entry-quality filters                    |
+//|  A) LQS_M1_DI_Align: sweep bar's M1 DI must agree with signal  |
+//|     direction. SELL: -DI >= +DI on bar[1]. BUY: +DI >= -DI.   |
+//|     Blocks sweeps where M1 momentum is still running against    |
+//|     the trade — e.g. strong bull bar that barely poked above    |
+//|     swing high with DI still bullish. Syncs with optimizer.     |
+//|  B) LQS_Bar_Range_Min_ATR: sweep bar total range (H-L) must    |
+//|     be at least N×ATR. Filters 1-tick-poke bars that have no   |
+//|     real volatility or institutional footprint behind them.     |
 //|                                                                  |
+//| v1.150: CloseBack + BodyDirection sweep-quality filters         |
 //| v1.140: LQS_Trend_Only filter                                   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.150"
-#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | CloseBack+BodyDir filters"
+#property version   "1.160"
+#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | DI-align+BarRange filters"
 
 #include <Trade\Trade.mqh>
 
@@ -69,6 +68,18 @@ input bool   LQS_Body_Direction     = true;
 // losses ($7-$11) that overwhelm the small fixed TP wins.
 // true = only trade when M1 is trending (ADX >= threshold, SL=1.5×ATR).
 // false = trade in both trending and ranging conditions (original behaviour).
+input bool   LQS_M1_DI_Align        = true;
+// Require bar[1] M1 DI direction to agree with the sweep signal.
+// SELL: -DI >= +DI on sweep bar (M1 bears in control or neutral).
+// BUY:  +DI >= -DI on sweep bar (M1 bulls in control or neutral).
+// Blocks sweeps where M1 momentum still runs against the trade direction —
+// e.g. a strong bull bar that barely poked above swing with DI still bullish.
+// Set false to disable (original behaviour).
+input double LQS_Bar_Range_Min_ATR  = 0.0;
+// Minimum sweep bar total range (H-L) as a fraction of ATR.
+// e.g. 0.5 = bar[1] range must be >= 0.5×ATR ($1.00+ at ATR=$2).
+// Filters 1-tick-poke sweeps with no real volatility or momentum.
+// 0 = disabled. Suggested starting value: 0.5.
 input double LQS_TP_Fixed        = 0.35;
 
 input group "=== Session Filter (SGT auto-detected) ==="
@@ -121,12 +132,14 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.150 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.160 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | LQS_TP_Fixed=", LQS_TP_Fixed,
          " | DI_Max_Counter=", LQS_M1_DI_Max_Counter,
          " | DI_Spread_Filter=", LQS_DI_Spread_Filter,
          " | TrendOnly=", LQS_Trend_Only,
+         " | DI_Align=", LQS_M1_DI_Align,
+         " | BarRange=", LQS_Bar_Range_Min_ATR, "xATR",
          " | RangingThresh=M1ADX<", M1_Ranging_Threshold);
 
    if(Enable_Notify && Notify_Interval_Min > 0)
@@ -432,6 +445,24 @@ void TryLQSTrade()
       if(lqsBuy  && c1 < midPoint) return;   // bearish body — not a real rejection
    }
 
+   // ── M1 DI alignment filter (v1.160) ──────────────────────────
+   // Sweep bar DI must agree with signal direction.
+   // SELL: -DI >= +DI. BUY: +DI >= -DI.
+   if(LQS_M1_DI_Align)
+   {
+      if(lqsSell && g_M1PlusDI  > g_M1MinusDI) return;   // M1 still bullish — skip sell
+      if(lqsBuy  && g_M1MinusDI > g_M1PlusDI)  return;   // M1 still bearish — skip buy
+   }
+
+   // ── Sweep bar minimum range filter (v1.160) ───────────────────
+   // Bar[1] total range (H-L) must be at least N×ATR.
+   // Filters minimal-volatility pokes with no institutional footprint.
+   if(LQS_Bar_Range_Min_ATR > 0.0)
+   {
+      double barRange = h1 - l1;
+      if(barRange < g_ATR * LQS_Bar_Range_Min_ATR) return;
+   }
+
    if(LQS_DI_Spread_Filter > 0.0)
    {
       double spreadSell1 = g_M1PlusDI  - g_M1MinusDI;
@@ -587,7 +618,7 @@ void DrawInfoPanel()
    else ctrStr = "  [DISABLED]";
 
    string info =
-      "╔══ LQS ZONE SCALPER  v1.150 (MT5) ════╗\n"
+      "╔══ LQS ZONE SCALPER  v1.160 (MT5) ════╗\n"
       "  Symbol    : " + Symbol()                                          + "\n"
       "  Magic     : " + IntegerToString(MagicNumber)                      + "\n"
       "────────────────────────────────────────\n"
