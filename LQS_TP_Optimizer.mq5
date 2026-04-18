@@ -24,8 +24,8 @@
 //+------------------------------------------------------------------+
 #property script_show_inputs
 #property copyright "Project ATR"
-#property version   "1.10"
-#property description "LQS TP Optimizer v1.10 — fixed-dollar TP levels, trend-only filter"
+#property version   "1.20"
+#property description "LQS TP Optimizer v1.20 — close-back + body-direction filters"
 
 input group "=== Date Range ==="
 input datetime DateFrom              = D'2026.04.13 00:00';
@@ -47,8 +47,17 @@ input bool     LQS_M1_DI_Align       = true;
 
 input bool     LQS_Trend_Only        = true;
 // Block entry when M1 ADX < M1_Ranging_Thresh (ranging mode).
-// Matches LQS_Trend_Only in LQS_ZONE_SCALPER_MT5 v1.140.
+// Matches LQS_Trend_Only in LQS_ZONE_SCALPER_MT5 v1.150.
 // Set false to include ranging-mode signals (original behaviour).
+
+input double   LQS_CloseBack_Min_ATR = 0.3;
+// Minimum close-back distance (× ATR). SELL: bar[1] close must be at
+// least N×ATR below swingHigh. BUY: N×ATR above swingLow. Set 0 to disable.
+
+input bool     LQS_Body_Direction    = true;
+// SELL: bar[1] must close in lower 50% of its range (bearish rejection).
+// BUY:  bar[1] must close in upper 50% of its range (bullish rejection).
+// Set false to disable.
 
 input group "=== Trade / EA Settings (match EA) ==="
 input int      ATR_Period            = 14;
@@ -196,6 +205,21 @@ void OnStart()
       {
          double wick = lqsSell ? (h1 - swHigh) : (swLow - l1);
          if(wick < atr * LQS_Wick_Min_ATR) continue;
+      }
+
+      //--- Close-back distance filter (v1.150)
+      if(LQS_CloseBack_Min_ATR > 0.0)
+      {
+         double closeBack = lqsSell ? (swHigh - c1) : (c1 - swLow);
+         if(closeBack < atr * LQS_CloseBack_Min_ATR) continue;
+      }
+
+      //--- Bar body direction filter (v1.150)
+      if(LQS_Body_Direction)
+      {
+         double midPoint = (h1 + l1) * 0.5;
+         if(lqsSell && c1 > midPoint) continue;
+         if(lqsBuy  && c1 < midPoint) continue;
       }
 
       //--- DI spread filter: check bar[1]=i and bar[2]=i+1

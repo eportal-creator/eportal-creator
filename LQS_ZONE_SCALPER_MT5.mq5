@@ -1,20 +1,25 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.140)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.150)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //|                                                                  |
-//| v1.140: LQS_Trend_Only filter — block LQS when M1 is ranging   |
-//|  (ADX < M1_Ranging_Threshold). Root cause: ranging mode uses    |
-//|  2.0×ATR SL while TP is a small fixed dollar amount. When ATR  |
-//|  is high (3-7) and M1 is choppy, SL losses of $7-$11 dwarf any |
-//|  win. Mar 2026 data: 3 ranging losses cost $26 combined while   |
-//|  9 wins at $0.35 TP earned only $3.15 — net -$23.             |
-//|  Fix: require M1 ADX >= M1_Ranging_Threshold before entry.     |
-//|  Trending signals keep 1.5×ATR SL — more manageable risk.      |
+//| v1.150: Two sweep-quality filters added                         |
+//|  A) LQS_CloseBack_Min_ATR: bar[1] must close at least N×ATR    |
+//|     below swingHigh (SELL) / above swingLow (BUY). Filters bars |
+//|     that barely graze the level and immediately close back —    |
+//|     weak rejections that often reverse again quickly.           |
+//|  B) LQS_Body_Direction: sweep bar must close in the lower half  |
+//|     of its range (SELL) or upper half (BUY). A bar closing at   |
+//|     its high while below the swing level shows continued buying  |
+//|     pressure — not a genuine rejection.                         |
+//|  Both filters target signal quality, not market direction, so   |
+//|  they improve results across trending AND ranging conditions.   |
+//|                                                                  |
+//| v1.140: LQS_Trend_Only filter                                   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.140"
-#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | DI_Spread=30 | TrendOnly"
+#property version   "1.150"
+#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | CloseBack+BodyDir filters"
 
 #include <Trade\Trade.mqh>
 
@@ -45,8 +50,20 @@ input group "=== LQS Settings ==="
 input int    LQS_Lookback        = 20;
 input double LQS_Wick_Min_ATR    = 0.0;
 input double LQS_DI_Spread_Filter = 30.0;
-input double LQS_M1_DI_Max_Counter = 0.0;
-input bool   LQS_Trend_Only      = true;
+input double LQS_M1_DI_Max_Counter  = 0.0;
+input bool   LQS_Trend_Only         = true;
+input double LQS_CloseBack_Min_ATR  = 0.3;
+// Minimum close-back distance as a fraction of ATR.
+// SELL: bar[1] must close at least (N × ATR) below swingHigh.
+// BUY:  bar[1] must close at least (N × ATR) above swingLow.
+// Filters weak rejections that barely graze the level before closing back.
+// 0.3 = bar must close $0.60+ below swing (at ATR=$2). Set 0 to disable.
+input bool   LQS_Body_Direction     = true;
+// Require sweep bar to close in the correct half of its range.
+// SELL: bar[1] close must be in the lower 50% of bar range (bearish body).
+// BUY:  bar[1] close must be in the upper 50% of bar range (bullish body).
+// Bars closing near their high (bullish pressure) after a SELL sweep signal
+// lack genuine rejection conviction. Set false to disable.
 // Block LQS entry when M1 ADX < M1_Ranging_Threshold (M1 is ranging).
 // Ranging mode uses 2.0×ATR SL — when ATR is high this creates large
 // losses ($7-$11) that overwhelm the small fixed TP wins.
@@ -104,7 +121,7 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.140 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.150 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | LQS_TP_Fixed=", LQS_TP_Fixed,
          " | DI_Max_Counter=", LQS_M1_DI_Max_Counter,
@@ -395,6 +412,26 @@ void TryLQSTrade()
       if(wickSize < g_ATR * LQS_Wick_Min_ATR) return;
    }
 
+   // ── Close-back distance filter (v1.150) ───────────────────────
+   // Bar[1] must close N×ATR below swingHigh (SELL) or above swingLow (BUY).
+   // Bars that barely close back past the swing level lack rejection strength.
+   if(LQS_CloseBack_Min_ATR > 0.0)
+   {
+      double closeBack = lqsSell ? (g_LQS_SwingHigh - c1) : (c1 - g_LQS_SwingLow);
+      if(closeBack < g_ATR * LQS_CloseBack_Min_ATR) return;
+   }
+
+   // ── Bar body direction filter (v1.150) ────────────────────────
+   // Sweep bar must close in the lower half of its range (SELL) or upper
+   // half (BUY). A bar closing near its high after a SELL sweep still has
+   // bullish pressure — not a genuine rejection candle.
+   if(LQS_Body_Direction)
+   {
+      double midPoint = (h1 + l1) * 0.5;
+      if(lqsSell && c1 > midPoint) return;   // bullish body — not a real rejection
+      if(lqsBuy  && c1 < midPoint) return;   // bearish body — not a real rejection
+   }
+
    if(LQS_DI_Spread_Filter > 0.0)
    {
       double spreadSell1 = g_M1PlusDI  - g_M1MinusDI;
@@ -550,7 +587,7 @@ void DrawInfoPanel()
    else ctrStr = "  [DISABLED]";
 
    string info =
-      "╔══ LQS ZONE SCALPER  v1.140 (MT5) ════╗\n"
+      "╔══ LQS ZONE SCALPER  v1.150 (MT5) ════╗\n"
       "  Symbol    : " + Symbol()                                          + "\n"
       "  Magic     : " + IntegerToString(MagicNumber)                      + "\n"
       "────────────────────────────────────────\n"
