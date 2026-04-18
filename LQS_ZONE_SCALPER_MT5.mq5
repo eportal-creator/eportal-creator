@@ -1,11 +1,20 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.130)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.140)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
+//|                                                                  |
+//| v1.140: LQS_Trend_Only filter — block LQS when M1 is ranging   |
+//|  (ADX < M1_Ranging_Threshold). Root cause: ranging mode uses    |
+//|  2.0×ATR SL while TP is a small fixed dollar amount. When ATR  |
+//|  is high (3-7) and M1 is choppy, SL losses of $7-$11 dwarf any |
+//|  win. Mar 2026 data: 3 ranging losses cost $26 combined while   |
+//|  9 wins at $0.35 TP earned only $3.15 — net -$23.             |
+//|  Fix: require M1 ADX >= M1_Ranging_Threshold before entry.     |
+//|  Trending signals keep 1.5×ATR SL — more manageable risk.      |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.130"
-#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | DI_Spread=30"
+#property version   "1.140"
+#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | DI_Spread=30 | TrendOnly"
 
 #include <Trade\Trade.mqh>
 
@@ -37,6 +46,12 @@ input int    LQS_Lookback        = 20;
 input double LQS_Wick_Min_ATR    = 0.0;
 input double LQS_DI_Spread_Filter = 30.0;
 input double LQS_M1_DI_Max_Counter = 0.0;
+input bool   LQS_Trend_Only      = true;
+// Block LQS entry when M1 ADX < M1_Ranging_Threshold (M1 is ranging).
+// Ranging mode uses 2.0×ATR SL — when ATR is high this creates large
+// losses ($7-$11) that overwhelm the small fixed TP wins.
+// true = only trade when M1 is trending (ADX >= threshold, SL=1.5×ATR).
+// false = trade in both trending and ranging conditions (original behaviour).
 input double LQS_TP_Fixed        = 0.35;
 
 input group "=== Session Filter (SGT auto-detected) ==="
@@ -89,11 +104,13 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.130 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.140 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | LQS_TP_Fixed=", LQS_TP_Fixed,
          " | DI_Max_Counter=", LQS_M1_DI_Max_Counter,
-         " | DI_Spread_Filter=", LQS_DI_Spread_Filter);
+         " | DI_Spread_Filter=", LQS_DI_Spread_Filter,
+         " | TrendOnly=", LQS_Trend_Only,
+         " | RangingThresh=M1ADX<", M1_Ranging_Threshold);
 
    if(Enable_Notify && Notify_Interval_Min > 0)
       EventSetTimer(Notify_Interval_Min * 60);
@@ -397,6 +414,8 @@ void TryLQSTrade()
    }
 
    bool   m1IsRanging = (g_M1ADX < M1_Ranging_Threshold);
+   if(LQS_Trend_Only && m1IsRanging) return;   // v1.140: skip ranging-mode entries
+
    double slMult      = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
    double slDist      = g_ATR * slMult;
    double tpDist      = LQS_TP_Fixed;
@@ -531,7 +550,7 @@ void DrawInfoPanel()
    else ctrStr = "  [DISABLED]";
 
    string info =
-      "╔══ LQS ZONE SCALPER  v1.100 (MT5) ════╗\n"
+      "╔══ LQS ZONE SCALPER  v1.140 (MT5) ════╗\n"
       "  Symbol    : " + Symbol()                                          + "\n"
       "  Magic     : " + IntegerToString(MagicNumber)                      + "\n"
       "────────────────────────────────────────\n"
@@ -543,7 +562,8 @@ void DrawInfoPanel()
                      + "  " + atrOk                                        + "\n"
       "  M1 ADX    : " + DoubleToString(g_M1ADX, 1)
                      + (g_M1ADX < M1_Ranging_Threshold
-                        ? "  [RANGING -> SL " + DoubleToString(SL_ATR_Ranging_Mult,1) + "xATR]"
+                        ? "  [RANGING -> SL " + DoubleToString(SL_ATR_Ranging_Mult,1) + "xATR"
+                          + (LQS_Trend_Only ? " BLOCKED]" : "]")
                         : "  [TREND   -> SL " + DoubleToString(SL_ATR_Factor,      1) + "xATR]") + "\n"
       "  M1 DI(1)  : +" + DoubleToString(g_M1PlusDI,  1)
                      + " / -" + DoubleToString(g_M1MinusDI, 1)            + "\n"
