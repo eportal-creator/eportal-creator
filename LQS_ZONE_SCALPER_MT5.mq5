@@ -1,23 +1,25 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.180)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.190)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //|                                                                  |
-//| v1.180: LQS_HTF_DI_Align — M5 trend direction filter           |
-//|  Blocks SELL sweeps when M5 +DI > -DI (M5 is bullish).         |
-//|  Blocks BUY  sweeps when M5 -DI > +DI (M5 is bearish).         |
-//|  Fixes the March problem: all-SELL during a gold bull run.      |
-//|  M5 DI reflects a 25-bar trend window — stable enough to filter |
-//|  direction without being as noisy as M1 DI.                     |
+//| v1.190: Dollar-based breakeven + trailing stop                  |
+//|  Replaces ATR-based trail (which never triggered at $0.75 TP).  |
+//|  LQS_BE_Trigger: move SL to entry when +$X profit.             |
+//|  LQS_Trail_Start: begin trailing SL when +$X profit.           |
+//|  LQS_Trail_Step: keep SL $X behind current price.              |
+//|  When trail is enabled (LQS_Trail_Start > 0), fixed TP is       |
+//|  removed at entry so winners can run past $0.75.                |
 //|                                                                  |
+//| v1.180: LQS_HTF_DI_Align — M5 trend direction filter           |
 //| v1.170: LQS_TP_ATR_Factor — dynamic ATR-based TP               |
 //| v1.160: DI-align + bar-range entry quality filters              |
 //| v1.150: CloseBack + BodyDirection sweep-quality filters         |
 //| v1.140: LQS_Trend_Only filter                                   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.180"
-#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | M5 trend filter"
+#property version   "1.190"
+#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | Trail + BE exit"
 
 #include <Trade\Trade.mqh>
 
@@ -41,8 +43,19 @@ input double ATR_Max_Filter      = 4.0;
 input double SL_ATR_Factor       = 1.5;
 input double SL_ATR_Ranging_Mult = 2.0;
 input double M1_Ranging_Threshold = 25.0;
-input double TSstart_ATR_Factor  = 0.8;
-input double TSstep_ATR_Factor   = 0.4;
+input group "=== LQS Trail / Breakeven ==="
+input double LQS_BE_Trigger   = 0.50;
+// Move SL to entry (breakeven) when trade profit reaches this dollar amount.
+// Protects capital on trades that move in favour then reverse before TP.
+// Set 0 to disable.
+input double LQS_Trail_Start  = 0.75;
+// Begin trailing SL when trade profit reaches this dollar amount.
+// When > 0, the fixed TP is removed at entry — trail manages the exit.
+// Set 0 to use fixed TP only (original behaviour).
+input double LQS_Trail_Step   = 0.30;
+// Dollar gap kept between the trailing SL and current price.
+// Smaller = tighter trail (exits sooner on reversal, captures less).
+// Suggested range: 0.20–0.50 for XAUUSD M1.
 
 input group "=== LQS Settings ==="
 input int    LQS_Lookback        = 20;
@@ -150,11 +163,18 @@ int OnInit()
 
    TodayDate = DayOfTime(TimeCurrent());
 
-   Print("LQS Zone Scalper v1.180 | Symbol=", Symbol(),
+   string exitMode = (LQS_Trail_Start > 0.0)
+                    ? "Trail +$" + DoubleToString(LQS_Trail_Start,2)
+                      + " step=$" + DoubleToString(LQS_Trail_Step,2)
+                      + (LQS_BE_Trigger > 0.0
+                         ? " BE=$" + DoubleToString(LQS_BE_Trigger,2)
+                         : "")
+                    : (LQS_TP_ATR_Factor > 0.0
+                       ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
+                       : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
+   Print("LQS Zone Scalper v1.190 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
-         " | TP=", (LQS_TP_ATR_Factor > 0.0
-                    ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
-                    : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]"),
+         " | Exit=", exitMode,
          " | DI_Align=", LQS_M1_DI_Align,
          " | BarRange=", LQS_Bar_Range_Min_ATR, "xATR",
          " | TrendOnly=", LQS_Trend_Only,
@@ -374,9 +394,6 @@ void CheckZoneApproach()
 //===================================================================
 void ManageTrades()
 {
-   bool   trailOk = (g_ATR > 0.0);
-   double tsStart = trailOk ? g_ATR * TSstart_ATR_Factor : 0.0;
-   double tsStep  = trailOk ? g_ATR * TSstep_ATR_Factor  : 0.0;
    double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
@@ -403,19 +420,33 @@ void ManageTrades()
          continue;
       }
 
-      if(!trailOk) continue;
+      // Price-distance profit in dollars (XAUUSD price = dollars per oz)
       double profit = (ptype == POSITION_TYPE_BUY) ? (bid - op) : (op - ask);
-      if(profit >= tsStart)
+      double newSL  = sl;
+
+      // Trail: price-follows SL once profit >= LQS_Trail_Start
+      if(LQS_Trail_Start > 0.0 && profit >= LQS_Trail_Start)
       {
-         double newSL = (ptype == POSITION_TYPE_BUY)
-                        ? NormalizeDouble(bid - tsStep, _Digits)
-                        : NormalizeDouble(ask + tsStep, _Digits);
+         double trailSL = (ptype == POSITION_TYPE_BUY)
+                          ? NormalizeDouble(bid - LQS_Trail_Step, _Digits)
+                          : NormalizeDouble(ask + LQS_Trail_Step, _Digits);
          bool improve = (ptype == POSITION_TYPE_BUY)
-                        ? (newSL > sl)
-                        : (sl == 0.0 || newSL < sl);
-         if(improve && !trade.PositionModify(ticket, newSL, tp))
-            Print("Modify SL FAIL: ", trade.ResultRetcodeDescription());
+                        ? (trailSL > newSL + _Point)
+                        : (newSL == 0.0 || trailSL < newSL - _Point);
+         if(improve) newSL = trailSL;
       }
+      // Breakeven: move SL to entry when profit >= LQS_BE_Trigger (and trail not yet active)
+      else if(LQS_BE_Trigger > 0.0 && profit >= LQS_BE_Trigger)
+      {
+         double beSL  = NormalizeDouble(op, _Digits);
+         bool improve = (ptype == POSITION_TYPE_BUY)
+                        ? (beSL > newSL + _Point)
+                        : (newSL == 0.0 || beSL < newSL - _Point);
+         if(improve) newSL = beSL;
+      }
+
+      if(newSL != sl && !trade.PositionModify(ticket, newSL, tp))
+         Print("Modify SL FAIL: ", trade.ResultRetcodeDescription());
    }
 }
 
@@ -521,9 +552,12 @@ void TryLQSTrade()
    bool   m1IsRanging = (g_M1ADX < M1_Ranging_Threshold);
    if(LQS_Trend_Only && m1IsRanging) return;   // v1.140: skip ranging-mode entries
 
-   double slMult      = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
-   double slDist      = g_ATR * slMult;
-   double tpDist      = (LQS_TP_ATR_Factor > 0.0) ? g_ATR * LQS_TP_ATR_Factor : LQS_TP_Fixed;
+   double slMult = m1IsRanging ? SL_ATR_Ranging_Mult : SL_ATR_Factor;
+   double slDist = g_ATR * slMult;
+   // When trail is active, remove fixed TP — trail and expiry manage exit.
+   double tpDist = (LQS_Trail_Start > 0.0) ? 0.0
+                 : (LQS_TP_ATR_Factor > 0.0) ? g_ATR * LQS_TP_ATR_Factor
+                 : LQS_TP_Fixed;
 
    double sl, tp;
    if(dir == ORDER_TYPE_BUY)
@@ -655,7 +689,7 @@ void DrawInfoPanel()
    else ctrStr = "  [DISABLED]";
 
    string info =
-      "╔══ LQS ZONE SCALPER  v1.180 (MT5) ════╗\n"
+      "╔══ LQS ZONE SCALPER  v1.190 (MT5) ════╗\n"
       "  Symbol    : " + Symbol()                                          + "\n"
       "  Magic     : " + IntegerToString(MagicNumber)                      + "\n"
       "────────────────────────────────────────\n"
@@ -688,10 +722,16 @@ void DrawInfoPanel()
                      + "  (price +" + DoubleToString(distSell, 1) + ")"   + "\n"
       "  BUY  zone : " + DoubleToString(g_LQS_SwingLow, 2)
                      + "  (price -" + DoubleToString(distBuy, 1) + ")"    + "\n"
-      "  TP mode   : " + (LQS_TP_ATR_Factor > 0.0
-                          ? DoubleToString(LQS_TP_ATR_Factor, 2) + "×ATR = $"
-                            + DoubleToString(g_ATR * LQS_TP_ATR_Factor, 2) + " [dynamic]"
-                          : "$" + DoubleToString(LQS_TP_Fixed, 2) + " [fixed]") + "\n"
+      "  Exit mode : " + (LQS_Trail_Start > 0.0
+                          ? "Trail +$" + DoubleToString(LQS_Trail_Start, 2)
+                            + " step=$" + DoubleToString(LQS_Trail_Step, 2)
+                            + (LQS_BE_Trigger > 0.0
+                               ? "  BE=$" + DoubleToString(LQS_BE_Trigger, 2)
+                               : "")
+                          : (LQS_TP_ATR_Factor > 0.0
+                             ? DoubleToString(LQS_TP_ATR_Factor, 2) + "×ATR = $"
+                               + DoubleToString(g_ATR * LQS_TP_ATR_Factor, 2) + " [dynamic]"
+                             : "$" + DoubleToString(LQS_TP_Fixed, 2) + " [fixed]")) + "\n"
       "  DI spread : thr=" + DoubleToString(LQS_DI_Spread_Filter, 1)
                      + (((g_M1PlusDI  - g_M1MinusDI)  >= LQS_DI_Spread_Filter ||
                          (g_M1PlusDI2 - g_M1MinusDI2) >= LQS_DI_Spread_Filter) ? "  [SELL BLK]"
