@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                    LQS ZONE SCALPER  (MT5 v1.190)               |
+//|                    LQS ZONE SCALPER  (MT5 v1.191)               |
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //|                                                                  |
@@ -166,10 +166,10 @@ int OnInit()
    ATR_Handle = iATR(Symbol(), PERIOD_M1, ATR_Period);
    if(ATR_Handle == INVALID_HANDLE) { Print("ERROR: ATR handle failed."); return INIT_FAILED; }
 
-   M1ADX_Handle = iADX(Symbol(), PERIOD_M1, 14);
+   M1ADX_Handle = iADX(Symbol(), PERIOD_M1, ATR_Period);
    if(M1ADX_Handle == INVALID_HANDLE) { Print("ERROR: M1 ADX handle failed."); return INIT_FAILED; }
 
-   M5ADX_Handle = iADX(Symbol(), PERIOD_M5, 14);
+   M5ADX_Handle = iADX(Symbol(), PERIOD_M5, ATR_Period);
    if(M5ADX_Handle == INVALID_HANDLE) { Print("ERROR: M5 ADX handle failed."); return INIT_FAILED; }
 
    trade.SetExpertMagicNumber(MagicNumber);
@@ -620,14 +620,17 @@ void TryLQSTrade()
             if(realTP != tp)
             {
                ulong ticket = trade.ResultOrder();
-               if(ticket > 0 && !trade.PositionModify(ticket, sl, realTP))
-                  Print("TP correct FAIL: ", trade.ResultRetcodeDescription());
-               else
-                  Print("TP corrected fill=", DoubleToString(fillPrice, _Digits),
-                        " requested=", DoubleToString(price, _Digits),
-                        " slip=", DoubleToString(fillPrice - price, _Digits),
-                        " oldTP=", DoubleToString(tp, _Digits),
-                        " newTP=", DoubleToString(realTP, _Digits));
+               if(ticket > 0)
+               {
+                  if(trade.PositionModify(ticket, sl, realTP))
+                     Print("TP corrected fill=", DoubleToString(fillPrice, _Digits),
+                           " requested=", DoubleToString(price, _Digits),
+                           " slip=", DoubleToString(fillPrice - price, _Digits),
+                           " oldTP=", DoubleToString(tp, _Digits),
+                           " newTP=", DoubleToString(realTP, _Digits));
+                  else
+                     Print("TP correct FAIL: ", trade.ResultRetcodeDescription());
+               }
             }
          }
       }
