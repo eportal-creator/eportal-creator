@@ -3,6 +3,15 @@
 //|  Standalone Liquidity Sweep EA — LQS signals only               |
 //|  Runs alongside ATR_AUTO_LOCK_SCALPER_MT5 (MagicNumber 7777)   |
 //|                                                                  |
+//| v1.191: Two targeted November fixes                            |
+//|  1. LQS_BE_Trigger default→0: disabled. BE was firing on 2-sec |
+//|     tick blips, converting winning trades into losses. Trail     |
+//|     at LQS_Trail_Start is sufficient protection.                |
+//|  2. LQS_Bar_Range_Max_ATR: blocks signals where the sweep bar   |
+//|     range exceeds N×ATR. Filters explosion/news bars (e.g.      |
+//|     Nov 21 07:58 bar range=$11.71 = 3.49×ATR was a news spike, |
+//|     not a genuine sweep). Default 3.0.                          |
+//|                                                                  |
 //| v1.190: Dollar-based breakeven + trailing stop                  |
 //|  Replaces ATR-based trail (which never triggered at $0.75 TP).  |
 //|  LQS_BE_Trigger: move SL to entry when +$X profit.             |
@@ -18,8 +27,8 @@
 //| v1.140: LQS_Trend_Only filter                                   |
 //+------------------------------------------------------------------+
 #property copyright "Project ATR"
-#property version   "1.190"
-#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | Trail + BE exit"
+#property version   "1.191"
+#property description "LQS Zone Scalper | Liquidity Sweep Only | XAUUSD M1 | Trail exit + explosion filter"
 
 #include <Trade\Trade.mqh>
 
@@ -44,10 +53,11 @@ input double SL_ATR_Factor       = 1.5;
 input double SL_ATR_Ranging_Mult = 2.0;
 input double M1_Ranging_Threshold = 25.0;
 input group "=== LQS Trail / Breakeven ==="
-input double LQS_BE_Trigger   = 0.50;
+input double LQS_BE_Trigger   = 0.0;
 // Move SL to entry (breakeven) when trade profit reaches this dollar amount.
-// Protects capital on trades that move in favour then reverse before TP.
-// Set 0 to disable.
+// WARNING: fires on every tick — can close winning trades on momentary blips.
+// Recommended: keep at 0 (disabled). Trail at LQS_Trail_Start is sufficient.
+// Set > 0 only if you accept early exits on brief retracements.
 input double LQS_Trail_Start  = 0.75;
 // Begin trailing SL when trade profit reaches this dollar amount.
 // When > 0, the fixed TP is removed at entry — trail manages the exit.
@@ -88,6 +98,12 @@ input bool   LQS_M1_DI_Align        = true;
 // e.g. a strong bull bar that barely poked above swing with DI still bullish.
 // Set false to disable (original behaviour).
 input double LQS_Bar_Range_Min_ATR  = 0.0;
+input double LQS_Bar_Range_Max_ATR  = 3.0;
+// Block signal if sweep bar range (H-L) exceeds N×ATR.
+// Filters explosion/news bars that technically sweep a level but are
+// really just a large directional move — not a genuine liquidity grab.
+// Nov 21 07:58: bar range=$11.71, ATR=$3.35 → 3.49×ATR → blocked.
+// All normal sweep bars have range < 2.5×ATR. Set 0 to disable.
 input bool   LQS_HTF_DI_Align       = true;
 // Block signal when M5 trend opposes the sweep direction.
 // SELL blocked when M5 +DI > -DI (M5 bullish — don't sell into strength).
@@ -172,7 +188,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("LQS Zone Scalper v1.190 | Symbol=", Symbol(),
+   Print("LQS Zone Scalper v1.191 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | DI_Align=", LQS_M1_DI_Align,
@@ -531,6 +547,17 @@ void TryLQSTrade()
       if(barRange < g_ATR * LQS_Bar_Range_Min_ATR) return;
    }
 
+   // ── Sweep bar maximum range filter (v1.191) ───────────────────
+   // Bar[1] total range (H-L) must not exceed N×ATR.
+   // Explosion bars (news spikes) technically sweep a level but their
+   // wide range puts the SL in danger from immediate reversal.
+   // e.g. a 3.5×ATR bar signals news — not a genuine liquidity sweep.
+   if(LQS_Bar_Range_Max_ATR > 0.0)
+   {
+      double barRange = h1 - l1;
+      if(barRange > g_ATR * LQS_Bar_Range_Max_ATR) return;
+   }
+
    if(LQS_DI_Spread_Filter > 0.0)
    {
       double spreadSell1 = g_M1PlusDI  - g_M1MinusDI;
@@ -689,7 +716,7 @@ void DrawInfoPanel()
    else ctrStr = "  [DISABLED]";
 
    string info =
-      "╔══ LQS ZONE SCALPER  v1.190 (MT5) ════╗\n"
+      "╔══ LQS ZONE SCALPER  v1.191 (MT5) ════╗\n"
       "  Symbol    : " + Symbol()                                          + "\n"
       "  Magic     : " + IntegerToString(MagicNumber)                      + "\n"
       "────────────────────────────────────────\n"
