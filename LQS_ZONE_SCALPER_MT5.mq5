@@ -53,11 +53,12 @@ input double SL_ATR_Factor       = 1.5;
 input double SL_ATR_Ranging_Mult = 2.0;
 input double M1_Ranging_Threshold = 25.0;
 input group "=== LQS Trail / Breakeven ==="
-input double LQS_BE_Trigger   = 0.0;
+input double LQS_BE_Trigger   = 0.50;
 // Move SL to entry (breakeven) when trade profit reaches this dollar amount.
-// WARNING: fires on every tick — can close winning trades on momentary blips.
-// Recommended: keep at 0 (disabled). Trail at LQS_Trail_Start is sufficient.
-// Set > 0 only if you accept early exits on brief retracements.
+// Protects capital when price briefly moves in favour then reverses to full SL.
+// Real-tick testing shows BE at $0.50 saves significant losses on trades that
+// touch profit briefly before reversing (Nov 5 08:23, Nov 21 01:07 examples).
+// Set 0 to disable — not recommended, full SL losses increase substantially.
 input double LQS_Trail_Start  = 0.75;
 // Begin trailing SL when trade profit reaches this dollar amount.
 // When > 0, the fixed TP is removed at entry — trail manages the exit.
