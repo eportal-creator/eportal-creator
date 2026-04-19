@@ -1,15 +1,18 @@
 //+------------------------------------------------------------------+
-//|                  LQS_TP_Optimizer.mq5               v1.40        |
+//|                  LQS_TP_Optimizer.mq5               v1.60        |
 //|                                                                  |
 //|  Replays LQS signal detection over a date range using the same   |
 //|  filters as LQS_ZONE_SCALPER_MT5.mq5, then simulates each trade  |
 //|  at 8 TP levels to find the optimal TP setting.                  |
 //|                                                                  |
-//|  v1.50 changes:                                                  |
-//|  - LQS_HTF_DI_Align: M5 DI trend filter. Block SELL when M5     |
-//|    +DI > -DI (bull), block BUY when M5 -DI > +DI (bear).       |
-//|    Matches LQS_HTF_DI_Align in EA v1.180.                       |
+//|  v1.60 changes:                                                  |
+//|  - LQS_Bar_Range_Max_ATR: block signals where sweep bar range    |
+//|    (H-L) exceeds N×ATR. Matches EA v1.191. Default 3.0.         |
+//|  - Defaults updated to match EA v1.191:                          |
+//|    LQS_Wick_Min_ATR=0, LQS_Trend_Only=false,                    |
+//|    ATR_Min=1.6, ATR_Max=4.0, TP=fixed$, LQS_TP_Current=0.75.   |
 //|                                                                  |
+//|  v1.50: LQS_HTF_DI_Align — M5 DI trend filter (EA v1.180)      |
 //|  v1.40: TP_Use_ATR_Factor — ATR-multiple TP mode (EA v1.170)   |
 //|  v1.30: LQS_Bar_Range_Min_ATR filter (EA v1.160)                |
 //|  v1.20: CloseBack + BodyDirection filters (EA v1.150)            |
@@ -27,8 +30,8 @@
 //+------------------------------------------------------------------+
 #property script_show_inputs
 #property copyright "Project ATR"
-#property version   "1.50"
-#property description "LQS TP Optimizer v1.50 — M5 HTF trend filter + all EA v1.180 filters"
+#property version   "1.60"
+#property description "LQS TP Optimizer v1.60 — Bar range max filter + EA v1.191 defaults"
 
 input group "=== Date Range ==="
 input datetime DateFrom              = D'2026.04.13 00:00';
@@ -38,7 +41,7 @@ input group "=== LQS Settings (match EA) ==="
 input int      LQS_Lookback          = 20;
 // Bars back (excl bar[1]) used to define swing high/low.
 
-input double   LQS_Wick_Min_ATR      = 0.3;
+input double   LQS_Wick_Min_ATR      = 0.0;
 // Min poke above/below swing level as a fraction of ATR.
 
 input double   LQS_DI_Spread_Filter  = 30.0;
@@ -48,10 +51,10 @@ input double   LQS_DI_Spread_Filter  = 30.0;
 input bool     LQS_M1_DI_Align       = true;
 // Require bar[1] M1 DI to align with the trade direction.
 
-input bool     LQS_Trend_Only        = true;
+input bool     LQS_Trend_Only        = false;
 // Block entry when M1 ADX < M1_Ranging_Thresh (ranging mode).
-// Matches LQS_Trend_Only in LQS_ZONE_SCALPER_MT5 v1.150.
-// Set false to include ranging-mode signals (original behaviour).
+// Matches LQS_Trend_Only in LQS_ZONE_SCALPER_MT5 v1.191.
+// Set true to exclude ranging-mode signals.
 
 input double   LQS_CloseBack_Min_ATR = 0.3;
 // Minimum close-back distance (× ATR). SELL: bar[1] close must be at
@@ -67,6 +70,13 @@ input double   LQS_Bar_Range_Min_ATR = 0.0;
 // e.g. 0.5 = bar[1] range must be >= 0.5×ATR. Filters minimal-poke bars.
 // Matches LQS_Bar_Range_Min_ATR in EA v1.160. Set 0 to disable.
 
+input double   LQS_Bar_Range_Max_ATR = 3.0;
+// Maximum sweep bar total range (H-L) as a fraction of ATR.
+// Blocks explosion/news bars that technically sweep a level but are
+// really a large directional move — SL gets hit almost immediately.
+// Nov 21 07:58 bar: range=$11.71, ATR=$3.35 → 3.49×ATR → blocked.
+// Matches LQS_Bar_Range_Max_ATR in EA v1.191. Set 0 to disable.
+
 input bool     LQS_HTF_DI_Align      = true;
 // Block SELL when M5 +DI > -DI (M5 bullish — don't sell into bull trend).
 // Block BUY  when M5 -DI > +DI (M5 bearish — don't buy into bear trend).
@@ -77,19 +87,19 @@ input int      ATR_Period            = 14;
 input double   SL_ATR_Factor         = 1.5;    // SL when M1 trending (ADX >= threshold)
 input double   SL_ATR_Ranging        = 2.0;    // SL when M1 ranging  (ADX <  threshold)
 input double   M1_Ranging_Thresh     = 25.0;   // M1 ADX below this → ranging
-input double   ATR_Min_Filter        = 1.0;    // Skip if M1 ATR < this ($ value)
-input double   ATR_Max_Filter        = 8.0;    // Skip if M1 ATR > this (0 = off)
+input double   ATR_Min_Filter        = 1.6;    // Skip if M1 ATR < this ($ value)
+input double   ATR_Max_Filter        = 4.0;    // Skip if M1 ATR > this (0 = off)
 input int      CooldownMinutes       = 5;      // Min gap between entries (minutes)
 input double   ExpireHours           = 0.5;    // Max bars forward before forced close
 input double   LotSize               = 0.01;   // Lot size (for $ P&L calculation)
 
 input group "=== TP Testing ==="
-input bool     TP_Use_ATR_Factor     = true;
+input bool     TP_Use_ATR_Factor     = false;
 // true  = test ATR multiples (matches LQS_TP_ATR_Factor in EA v1.170).
 //         Levels: 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.50×ATR.
 // false = test fixed dollar amounts (matches LQS_TP_Fixed in EA).
 //         Levels: $0.20, $0.35, $0.50, $0.75, $1.00, $1.50, $2.00, $3.00.
-input double   LQS_TP_Current        = 1.0;
+input double   LQS_TP_Current        = 0.75;
 // Your current TP setting — marked with ◄ CURRENT in output.
 // In ATR mode: your LQS_TP_ATR_Factor value (e.g. 1.0).
 // In fixed mode: your LQS_TP_Fixed value (e.g. 0.35).
@@ -262,6 +272,13 @@ void OnStart()
       {
          double barRange = h1 - l1;
          if(barRange < atr * LQS_Bar_Range_Min_ATR) continue;
+      }
+
+      //--- Sweep bar maximum range filter (v1.191)
+      if(LQS_Bar_Range_Max_ATR > 0.0)
+      {
+         double barRange = h1 - l1;
+         if(barRange > atr * LQS_Bar_Range_Max_ATR) continue;
       }
 
       //--- DI spread filter: check bar[1]=i and bar[2]=i+1
