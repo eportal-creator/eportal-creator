@@ -1,7 +1,13 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB BREAKOUT  (MT5 v1.4)                        |
+//|                    PROJECT BB BREAKOUT  (MT5 v1.5)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v1.5: BO_HTF_DI_Required — M5 DI confirmation for breakouts      |
+//|  BO SELL blocked when M5 +DI > -DI (M5 still bullish).          |
+//|  BO BUY  blocked when M5 -DI > +DI (M5 still bearish).          |
+//|  Prevents false breakouts at M1 that conflict with M5 trend.    |
+//|  Pullback (LQS/BB) entries unaffected.                          |
 //|                                                                  |
 //| v1.4: DI direction + double-entry fixes                          |
 //|  LQS_M1_DI_Align default true: block counter-DI entries even    |
@@ -53,7 +59,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB Breakout"
-#property version   "1.400"
+#property version   "1.500"
 #property description "Project BB Breakout | LQS + Breakout Continuation | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -208,6 +214,15 @@ input bool   BB_Close_Zone_Filter   = true;
 //   or lower half, offering poor risk:reward for a SELL.
 // BUY:  bar[1] close must be <= BB Middle (lower half). Prevents buying after
 //   the bar has already bounced back above the midline.
+
+input group "=== Breakout Settings ==="
+input bool   BO_HTF_DI_Required     = true;
+// Require M5 DI to confirm breakout direction, regardless of M1 trending status.
+// BO SELL blocked when M5 +DI > -DI (M5 still bullish — false breakdown risk).
+// BO BUY  blocked when M5 -DI > +DI (M5 still bearish — false breakout risk).
+// Breakouts are higher-risk entries; a false break at M1 is less likely when M5
+// also agrees. Pullback (LQS/BB) entries are unaffected by this flag.
+// Set false to disable (breakouts allowed regardless of M5 direction).
 // Enable for mean reversion (default). Disable only for breakout/trend setups.
 input double BB_Width_Min_ATR       = 0.0;
 // Minimum BB width (upper - lower) as a multiple of ATR.
@@ -776,6 +791,15 @@ void TryLQSTrade()
    // Riding mode: M1 DI already confirms direction — M5 HTF not needed and
    // would block valid with-trend pullback entries during intraday retracements.
    if(LQS_HTF_DI_Align && !m1IsTrending)
+   {
+      if(isSell && g_M5PlusDI  > g_M5MinusDI) return;
+      if(isBuy  && g_M5MinusDI > g_M5PlusDI)  return;
+   }
+
+   // Breakout entries: always enforce M5 DI alignment regardless of trending status.
+   // False breakouts at M1 level are less likely when M5 trend agrees.
+   // Pullback entries (LQS/BB) are unaffected.
+   if(BO_HTF_DI_Required && isBreakout)
    {
       if(isSell && g_M5PlusDI  > g_M5MinusDI) return;
       if(isBuy  && g_M5MinusDI > g_M5PlusDI)  return;
