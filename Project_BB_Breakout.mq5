@@ -1,7 +1,22 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB BREAKOUT  (MT5 v1.6)                        |
+//|                    PROJECT BB BREAKOUT  (MT5 v1.7)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v1.7: Four BO entry quality fixes                                 |
+//|  Fix 1: Bar range check on BO bar — reuses LQS_Bar_Range_Max_ATR.|
+//|    A single breakout candle with range > N×ATR is an exhaustion   |
+//|    spike; entering after it risks chasing a snap-back.            |
+//|  Fix 2: BO_SL_Buffer — separate, wider SL buffer for BO entries.  |
+//|    Breakouts routinely retest the broken level; 0.20 was too      |
+//|    tight. Default 0.60 survives normal retests.                   |
+//|  Fix 3: BO_Max_Entry_Dist_ATR — skip if entry is already too far  |
+//|    from the broken level. A large spike bar leaves entry extended; |
+//|    also blocks entries where price has already reversed past the   |
+//|    level before the EA can open the position.                     |
+//|  Fix 4: Continuation check — skip BO if the live bar[0] is        |
+//|    already moving against the breakout direction. A green bar[0]  |
+//|    on a BO SELL (or red on a BO BUY) shows fading momentum.       |
 //|                                                                  |
 //| v1.6: BO_Max_Run_Bars — block BO after extended candle run        |
 //|  BO SELL blocked if N+ consecutive red bars already printed.    |
@@ -63,7 +78,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB Breakout"
-#property version   "1.600"
+#property version   "1.700"
 #property description "Project BB Breakout | LQS + Breakout Continuation | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -230,6 +245,19 @@ input int    BO_Max_Run_Bars        = 5;
 // 5 = block if 5+ consecutive bars already moved in that direction.
 // XAUUSD M1 typically reverses within 4–5 bars; 6 lets exhausted entries through.
 // Set 0 to disable.
+input double BO_SL_Buffer           = 0.60;
+// SL buffer for breakout entries — wider than Riding_SL_Buffer to survive retests.
+// BO SELL SL = swing_low  + BO_SL_Buffer (above broken support, now resistance).
+// BO BUY  SL = swing_high - BO_SL_Buffer (below broken resistance, now support).
+// Breakouts routinely retest the broken level before continuing; 0.20 is too tight.
+// Recommended: 0.50–0.80 for XAUUSD M1.
+input double BO_Max_Entry_Dist_ATR  = 0.5;
+// Block BO if entry price has already moved more than N×ATR past the broken level.
+// A large breakout bar can push entry far from the swing level — the move is already
+// extended and prone to snap-back before the EA even opens the position.
+// BO SELL: entry (bid) must be within N×ATR below swing_low.
+// BO BUY:  entry (ask) must be within N×ATR above swing_high.
+// Set 0 to disable. Recommended: 0.5 (=$1.00 at ATR=$2.00).
 // Enable for mean reversion (default). Disable only for breakout/trend setups.
 input double BB_Width_Min_ATR       = 0.0;
 // Minimum BB width (upper - lower) as a multiple of ATR.
@@ -312,7 +340,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("Project BB Breakout v1.6 | Symbol=", Symbol(),
+   Print("Project BB Breakout v1.7 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | HTF_DI=", LQS_HTF_DI_Align,
@@ -728,6 +756,30 @@ void TryLQSTrade()
    if(isSell) { dir = ORDER_TYPE_SELL; price = SymbolInfoDouble(Symbol(), SYMBOL_BID); }
    else       { dir = ORDER_TYPE_BUY;  price = SymbolInfoDouble(Symbol(), SYMBOL_ASK); }
 
+   // ── Breakout pre-entry filters ────────────────────────────────
+   if(isBreakout)
+   {
+      // Fix 3: block if entry is already too far from the broken level.
+      // A large breakout bar can push price far below/above the swing level before
+      // the next bar opens — the move is extended and a snap-back is likely.
+      // Also blocks re-entries where price has already reversed back past the level.
+      if(BO_Max_Entry_Dist_ATR > 0.0)
+      {
+         double distFromLevel = (dir == ORDER_TYPE_SELL)
+                                ? (g_LQS_SwingLow  - price)   // +ve = below swing (good)
+                                : (price - g_LQS_SwingHigh);  // +ve = above swing (good)
+         if(distFromLevel < 0.0 || distFromLevel > g_ATR * BO_Max_Entry_Dist_ATR) return;
+      }
+
+      // Fix 4: require the current (live) bar to not already be reversing.
+      // If bar[0] has opened and is already moving against the breakout direction,
+      // the momentum is fading — avoid chasing a stalling move.
+      double c0 = iClose(Symbol(), PERIOD_M1, 0);
+      double o0 = iOpen(Symbol(),  PERIOD_M1, 0);
+      if(isSell && c0 > o0) return;   // current bar green — reversal underway
+      if(isBuy  && c0 < o0) return;   // current bar red   — reversal underway
+   }
+
    // ── LQS-only filters ─────────────────────────────────────────
    if(isLQS)
    {
@@ -813,6 +865,15 @@ void TryLQSTrade()
       if(runCount >= BO_Max_Run_Bars) return;
    }
 
+   // Fix 1: block BO if the breakout bar itself is a large exhaustion spike.
+   // Reuses LQS_Bar_Range_Max_ATR — same threshold, same intent.
+   // A single candle with range > N×ATR is a news/momentum spike, not a
+   // genuine breakout bar; entering after it risks chasing exhaustion.
+   if(isBreakout && LQS_Bar_Range_Max_ATR > 0.0)
+   {
+      if((h1 - l1) > g_ATR * LQS_Bar_Range_Max_ATR) return;
+   }
+
    if(g_BB_Upper > 0.0 && g_BB_Lower > 0.0)
    {
       double bbWidth = g_BB_Upper - g_BB_Lower;
@@ -881,10 +942,12 @@ void TryLQSTrade()
    {
       double structSL;
       if(isBreakout)
-         // BO entries: SL at the broken level — reclaim = breakout failed
+         // BO entries: SL at the broken level using wider BO_SL_Buffer —
+         // breakouts frequently retest the broken level before continuing;
+         // a tight buffer causes premature stop-outs on valid retests.
          structSL = (dir == ORDER_TYPE_BUY)
-                    ? NormalizeDouble(g_LQS_SwingHigh - Riding_SL_Buffer, _Digits)
-                    : NormalizeDouble(g_LQS_SwingLow  + Riding_SL_Buffer, _Digits);
+                    ? NormalizeDouble(g_LQS_SwingHigh - BO_SL_Buffer, _Digits)
+                    : NormalizeDouble(g_LQS_SwingLow  + BO_SL_Buffer, _Digits);
       else
          // LQS entries: SL at the swept level — reclaim = sweep was real
          structSL = (dir == ORDER_TYPE_BUY)
@@ -1131,7 +1194,7 @@ void DrawInfoPanel()
       bbWidthStatus = "[OK]";
 
    string info =
-      "╔══ PROJECT BB BREAKOUT  v1.2  |  LQS + Bollinger Bands ══╗\n"
+      "╔══ PROJECT BB BREAKOUT  v1.7  |  LQS + Bollinger Bands ══╗\n"
       "  Symbol  : " + Symbol()
                      + "   Magic : " + IntegerToString(MagicNumber)        + "\n"
       "  Bid/Ask : " + DoubleToString(bid, _Digits)
