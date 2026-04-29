@@ -1,7 +1,13 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB BREAKOUT  (MT5 v1.5)                        |
+//|                    PROJECT BB BREAKOUT  (MT5 v1.6)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v1.6: BO_Max_Run_Bars — block BO after extended candle run        |
+//|  BO SELL blocked if N+ consecutive red bars already printed.    |
+//|  BO BUY  blocked if N+ consecutive green bars already printed.  |
+//|  Prevents entering a breakout at exhaustion (12:43 trap: 7 red  |
+//|  candles then immediate reversal). Default: 6 bars.             |
 //|                                                                  |
 //| v1.5: BO_HTF_DI_Required — M5 DI confirmation for breakouts      |
 //|  BO SELL blocked when M5 +DI > -DI (M5 still bullish).          |
@@ -57,7 +63,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB Breakout"
-#property version   "1.500"
+#property version   "1.600"
 #property description "Project BB Breakout | LQS + Breakout Continuation | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -216,6 +222,13 @@ input bool   BO_HTF_DI_Required     = true;
 // Breakouts are higher-risk entries; a false break at M1 is less likely when M5
 // also agrees. Pullback (LQS/BB) entries are unaffected by this flag.
 // Set false to disable (breakouts allowed regardless of M5 direction).
+input int    BO_Max_Run_Bars        = 6;
+// Block BO entry when price has already run N or more consecutive bars in the
+// breakout direction — signals an extended move at risk of exhaustion reversal.
+// BO SELL blocked when bar[1..N] are all red (close < open) = 7-candle drop trap.
+// BO BUY  blocked when bar[1..N] are all green (close > open).
+// 6 = block if 6+ consecutive bars already moved in that direction.
+// Set 0 to disable.
 // Enable for mean reversion (default). Disable only for breakout/trend setups.
 input double BB_Width_Min_ATR       = 0.0;
 // Minimum BB width (upper - lower) as a multiple of ATR.
@@ -781,6 +794,22 @@ void TryLQSTrade()
    {
       if(isSell && g_M5PlusDI  > g_M5MinusDI) return;
       if(isBuy  && g_M5MinusDI > g_M5PlusDI)  return;
+   }
+
+   // Block BO entry when price has already run N+ consecutive bars in the
+   // breakout direction — extended moves are prone to exhaustion reversals.
+   if(BO_Max_Run_Bars > 0 && isBreakout)
+   {
+      int runCount = 0;
+      for(int k = 1; k <= BO_Max_Run_Bars; k++)
+      {
+         double o = iOpen(Symbol(),  PERIOD_M1, k);
+         double c = iClose(Symbol(), PERIOD_M1, k);
+         if(isSell && c < o) runCount++;   // red candle
+         else if(isBuy  && c > o) runCount++;   // green candle
+         else break;
+      }
+      if(runCount >= BO_Max_Run_Bars) return;
    }
 
    if(g_BB_Upper > 0.0 && g_BB_Lower > 0.0)
