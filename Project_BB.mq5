@@ -1,7 +1,13 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB  (MT5 v1.6)                        |
+//|                    PROJECT BB  (MT5 v1.7)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v1.7: Lower BE trigger default 0.50→0.35                         |
+//|  Trades reversing near $0.40 profit now exit at breakeven        |
+//|  instead of taking a full ATR-based SL loss.                    |
+//|  Ambiguous-bar fix: outside bar sweeping both swing levels       |
+//|  now skipped (was silently defaulting to SELL).                 |
 //|                                                                  |
 //| v1.4: Mode-aware HTF filter                                      |
 //|  Riding the Bands: M5 HTF filter skipped for with-trend entries.|
@@ -42,7 +48,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB"
-#property version   "1.600"
+#property version   "1.700"
 #property description "Project BB | LQS + Bollinger Band Confluence | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -85,9 +91,10 @@ input double Riding_SL_Buffer     = 0.20;
 // Dollar buffer beyond swing level for structure-based SL.
 // Absorbs minor wicks past the level without invalidating the trade.
 input group "=== LQS Trail / Breakeven ==="
-input double LQS_BE_Trigger   = 0.50;
+input double LQS_BE_Trigger   = 0.35;
 // Move SL to breakeven when trade profit reaches this dollar amount.
 // Set 0 to disable.
+// 0.35: catches reversals that peak around $0.40 before BE triggers.
 input double LQS_BE_Buffer    = 0.25;
 // Dollar buffer added beyond entry when BE triggers.
 // SELL: SL = entry - buffer (locks in $0.15 minimum profit).
