@@ -3,7 +3,7 @@
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
 //|                                                                  |
-//| v1.7: Four BO entry quality fixes                                 |
+//| v1.7: Three BO entry quality fixes                                 |
 //|  Fix 1: Bar range check on BO bar — reuses LQS_Bar_Range_Max_ATR.|
 //|    A single breakout candle with range > N×ATR is an exhaustion   |
 //|    spike; entering after it risks chasing a snap-back.            |
@@ -14,9 +14,6 @@
 //|    from the broken level. A large spike bar leaves entry extended; |
 //|    also blocks entries where price has already reversed past the   |
 //|    level before the EA can open the position.                     |
-//|  Fix 4: Continuation check — skip BO if the live bar[0] is        |
-//|    already moving against the breakout direction. A green bar[0]  |
-//|    on a BO SELL (or red on a BO BUY) shows fading momentum.       |
 //|                                                                  |
 //| v1.6: BO_Max_Run_Bars — block BO after extended candle run        |
 //|  BO SELL blocked if N+ consecutive red bars already printed.    |
@@ -771,13 +768,6 @@ void TryLQSTrade()
          if(distFromLevel < 0.0 || distFromLevel > g_ATR * BO_Max_Entry_Dist_ATR) return;
       }
 
-      // Fix 4: require the current (live) bar to not already be reversing.
-      // If bar[0] has opened and is already moving against the breakout direction,
-      // the momentum is fading — avoid chasing a stalling move.
-      double c0 = iClose(Symbol(), PERIOD_M1, 0);
-      double o0 = iOpen(Symbol(),  PERIOD_M1, 0);
-      if(isSell && c0 > o0) return;   // current bar green — reversal underway
-      if(isBuy  && c0 < o0) return;   // current bar red   — reversal underway
    }
 
    // ── LQS-only filters ─────────────────────────────────────────
