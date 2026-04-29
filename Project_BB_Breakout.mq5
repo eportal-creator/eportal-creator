@@ -7,7 +7,7 @@
 //|  BO SELL blocked if N+ consecutive red bars already printed.    |
 //|  BO BUY  blocked if N+ consecutive green bars already printed.  |
 //|  Prevents entering a breakout at exhaustion (12:43 trap: 7 red  |
-//|  candles then immediate reversal). Default: 6 bars.             |
+//|  candles then immediate reversal). Default: 5 bars.             |
 //|                                                                  |
 //| v1.5: BO_HTF_DI_Required — M5 DI confirmation for breakouts      |
 //|  BO SELL blocked when M5 +DI > -DI (M5 still bullish).          |
@@ -222,12 +222,13 @@ input bool   BO_HTF_DI_Required     = true;
 // Breakouts are higher-risk entries; a false break at M1 is less likely when M5
 // also agrees. Pullback (LQS/BB) entries are unaffected by this flag.
 // Set false to disable (breakouts allowed regardless of M5 direction).
-input int    BO_Max_Run_Bars        = 6;
+input int    BO_Max_Run_Bars        = 5;
 // Block BO entry when price has already run N or more consecutive bars in the
 // breakout direction — signals an extended move at risk of exhaustion reversal.
-// BO SELL blocked when bar[1..N] are all red (close < open) = 7-candle drop trap.
+// BO SELL blocked when bar[1..N] are all red (close < open).
 // BO BUY  blocked when bar[1..N] are all green (close > open).
-// 6 = block if 6+ consecutive bars already moved in that direction.
+// 5 = block if 5+ consecutive bars already moved in that direction.
+// XAUUSD M1 typically reverses within 4–5 bars; 6 lets exhausted entries through.
 // Set 0 to disable.
 // Enable for mean reversion (default). Disable only for breakout/trend setups.
 input double BB_Width_Min_ATR       = 0.0;
