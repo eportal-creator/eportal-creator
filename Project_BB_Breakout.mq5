@@ -312,7 +312,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("Project BB Breakout v1.2 | Symbol=", Symbol(),
+   Print("Project BB Breakout v1.6 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | HTF_DI=", LQS_HTF_DI_Align,
