@@ -1,7 +1,13 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB  (MT5 v1.7)                        |
+//|                    PROJECT BB  (MT5 v1.8)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v1.8: DI direction + double-entry fixes                          |
+//|  LQS_M1_DI_Align default true: block counter-DI entries even    |
+//|    in ranging mode (was only enforced when ADX >= threshold).    |
+//|  PeerMagicNumber: cross-EA guard prevents Project BB + BB        |
+//|    Breakout from both entering on the same bar.                  |
 //|                                                                  |
 //| v1.7: Lower BE trigger default 0.50→0.35                         |
 //|  Trades reversing near $0.40 profit now exit at breakeven        |
@@ -48,7 +54,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB"
-#property version   "1.700"
+#property version   "1.800"
 #property description "Project BB | LQS + Bollinger Band Confluence | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -66,6 +72,11 @@ CTrade trade;
 input group "=== Trade ==="
 input double LotSize             = 0.01;
 input int    MagicNumber         = 4444;
+input int    PeerMagicNumber     = 3333;
+// Magic number of the other Project BB EA running on the same chart.
+// When > 0: skip entry if that EA already has a position open — prevents
+// both EAs from doubling into the same signal on the same bar.
+// Set 0 to disable the cross-EA check.
 input double ExpireHours         = 0.5;
 input int    CooldownMinutes     = 2;
 
@@ -133,13 +144,15 @@ input bool   LQS_Body_Direction     = false;
 // losses ($7-$11) that overwhelm the small fixed TP wins.
 // true = only trade when M1 is trending (ADX >= threshold, SL=1.5×ATR).
 // false = trade in both trending and ranging conditions (original behaviour).
-input bool   LQS_M1_DI_Align        = false;
+input bool   LQS_M1_DI_Align        = true;
 // Require bar[1] M1 DI direction to agree with the sweep signal.
 // SELL: -DI >= +DI on sweep bar (M1 bears in control or neutral).
 // BUY:  +DI >= -DI on sweep bar (M1 bulls in control or neutral).
-// Blocks sweeps where M1 momentum still runs against the trade direction —
-// e.g. a strong bull bar that barely poked above swing with DI still bullish.
-// Set false to disable (original behaviour).
+// Blocks sweeps where M1 momentum runs against the trade direction —
+// e.g. BB BUY triggered at lower band while -DI >> +DI (downtrend).
+// Enabled by default — covers the ranging case where m1IsTrending=false
+// and the trending DI check would otherwise be skipped entirely.
+// Set false to allow counter-DI entries in ranging markets.
 input double LQS_Bar_Range_Min_ATR  = 0.0;
 input double LQS_Bar_Range_Max_ATR  = 3.0;
 // Block signal if sweep bar range (H-L) exceeds N×ATR.
@@ -381,6 +394,20 @@ void RefreshLQSLevels()
    if(CopyLow (Symbol(), PERIOD_M1, 2, LQS_Lookback, lows)  < LQS_Lookback) return;
    g_LQS_SwingHigh = highs[ArrayMaximum(highs)];
    g_LQS_SwingLow  = lows [ArrayMinimum(lows)];
+}
+
+bool PeerHasPosition()
+{
+   if(PeerMagicNumber <= 0) return false;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL)      == Symbol() &&
+         (int)PositionGetInteger(POSITION_MAGIC) == PeerMagicNumber)
+         return true;
+   }
+   return false;
 }
 
 int CountMyPositions()
@@ -650,6 +677,7 @@ void TryLQSTrade()
    if(ATR_Max_Filter > 0.0 && g_ATR > ATR_Max_Filter) return;
    if((long)(TimeCurrent() - LastEntry) < (long)(CooldownMinutes * 60)) return;
    if(CountMyPositions() > 0) return;
+   if(PeerHasPosition()) return;   // peer EA already entered this bar
 
    double h1 = iHigh(Symbol(),  PERIOD_M1, 1);
    double l1 = iLow(Symbol(),   PERIOD_M1, 1);
