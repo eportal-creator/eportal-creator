@@ -110,7 +110,7 @@ input double LQS_BE_Trigger   = 0.35;
 // Move SL to breakeven when trade profit reaches this dollar amount.
 // Set 0 to disable.
 // 0.35: catches reversals that peak around $0.40 before BE triggers.
-input double LQS_BE_Buffer    = 0.25;
+input double LQS_BE_Buffer    = 0.15;
 // Dollar buffer added beyond entry when BE triggers.
 // SELL: SL = entry - buffer (locks in $0.15 minimum profit).
 // BUY:  SL = entry + buffer (locks in $0.15 minimum profit).
