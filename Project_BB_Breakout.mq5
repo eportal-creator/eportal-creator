@@ -1,7 +1,13 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB BREAKOUT  (MT5 v2.0)                        |
+//|                    PROJECT BB BREAKOUT  (MT5 v2.1)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v2.1: BB_SL_Dollar — fixed dollar SL for BB-only entries         |
+//|  Overrides band-based SL for BB entries. Places SL exactly N     |
+//|  dollars from entry — predictable loss cap regardless of band    |
+//|  position or ATR. Default 0.75. Does not affect LQS or BO        |
+//|  entries. Set 0 to use band-based SL.                            |
 //|                                                                  |
 //| v2.0: BO_SL_Dollar — fixed dollar SL for BO entries               |
 //|  Overrides structure SL (BO_SL_Buffer) for BO entries. Places SL  |
@@ -81,7 +87,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB Breakout"
-#property version   "2.000"
+#property version   "2.100"
 #property description "Project BB Breakout | LQS + Breakout Continuation | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -231,6 +237,12 @@ input bool   BB_Close_Zone_Filter   = true;
 //   or lower half, offering poor risk:reward for a SELL.
 // BUY:  bar[1] close must be <= BB Middle (lower half). Prevents buying after
 //   the bar has already bounced back above the midline.
+input double BB_SL_Dollar           = 0.75;
+// Fixed dollar SL for BB-only entries (BB BUY / BB SELL, no LQS sweep, no BO).
+// Overrides band-based SL — places SL exactly N dollars from entry price.
+// BB BUY: SL = entry - BB_SL_Dollar. BB SELL: SL = entry + BB_SL_Dollar.
+// Guarantees consistent max loss regardless of band position or ATR.
+// Does not affect LQS or BO entries. Set 0 to use band-based SL.
 
 input group "=== Breakout Settings ==="
 input bool   BO_HTF_DI_Required     = true;
@@ -344,7 +356,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("Project BB Breakout v2.0 | Symbol=", Symbol(),
+   Print("Project BB Breakout v2.1 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | HTF_DI=", LQS_HTF_DI_Align,
@@ -935,6 +947,16 @@ void TryLQSTrade()
       else sl = (dir == ORDER_TYPE_BUY) ? NormalizeDouble(price - slDist, _Digits)
                                         : NormalizeDouble(price + slDist, _Digits);
    }
+   // BB-only entries: fixed dollar SL — predictable loss cap regardless of
+   // band position or ATR. Overrides band-based SL when BB_SL_Dollar > 0.
+   // LQS and BO entries are excluded (handled by their own SL paths above).
+   else if(!isLQS && !isBreakout && BB_SL_Dollar > 0.0)
+   {
+      sl     = (dir == ORDER_TYPE_BUY)
+               ? NormalizeDouble(price - BB_SL_Dollar, _Digits)
+               : NormalizeDouble(price + BB_SL_Dollar, _Digits);
+      slDist = BB_SL_Dollar;
+   }
    // BB-only entries: SL at the band that triggered the entry.
    // Use whichever is tighter — band-based or ATR-based.
    // BUY: if price breaks back below BB_Lower the reversal has failed.
@@ -1171,7 +1193,7 @@ void DrawInfoPanel()
       bbWidthStatus = "[OK]";
 
    string info =
-      "╔══ PROJECT BB BREAKOUT  v2.0  |  LQS + Bollinger Bands ══╗\n"
+      "╔══ PROJECT BB BREAKOUT  v2.1  |  LQS + Bollinger Bands ══╗\n"
       "  Symbol  : " + Symbol()
                      + "   Magic : " + IntegerToString(MagicNumber)        + "\n"
       "  Bid/Ask : " + DoubleToString(bid, _Digits)

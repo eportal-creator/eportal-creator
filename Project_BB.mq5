@@ -1,7 +1,12 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB  (MT5 v1.8)                        |
+//|                    PROJECT BB  (MT5 v1.9)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v1.9: BB_SL_Dollar — fixed dollar SL for BB-only entries         |
+//|  Overrides band-based SL for BB entries. Places SL exactly N     |
+//|  dollars from entry — predictable loss cap regardless of band    |
+//|  position or ATR. Default 0.75. Set 0 to use band-based SL.     |
 //|                                                                  |
 //| v1.8: LQS_M1_DI_Align default true                               |
 //|  Block counter-DI entries even in ranging mode (was only         |
@@ -52,7 +57,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB"
-#property version   "1.800"
+#property version   "1.900"
 #property description "Project BB | LQS + Bollinger Band Confluence | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -211,6 +216,12 @@ input double BB_Width_Max_ATR       = 0.0;
 // Maximum BB width (upper - lower) as a multiple of ATR.
 // Blocks entries when bands are over-expanded (mean reversion may be exhausted).
 // 0 = disabled.
+input double BB_SL_Dollar           = 0.75;
+// Fixed dollar SL for BB-only entries (BB BUY / BB SELL, no LQS sweep).
+// Overrides band-based SL — places SL exactly N dollars from entry price.
+// BB BUY: SL = entry - BB_SL_Dollar. BB SELL: SL = entry + BB_SL_Dollar.
+// Guarantees consistent max loss regardless of band position or ATR.
+// Does not affect LQS entries. Set 0 to use band-based SL (original behaviour).
 
 input group "=== Session Filter (SGT auto-detected) ==="
 input bool   EnableSessionFilter = true;
@@ -284,7 +295,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("Project BB v1.8 | Symbol=", Symbol(),
+   Print("Project BB v1.9 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | HTF_DI=", LQS_HTF_DI_Align,
@@ -818,6 +829,15 @@ void TryLQSTrade()
       else sl = (dir == ORDER_TYPE_BUY) ? NormalizeDouble(price - slDist, _Digits)
                                         : NormalizeDouble(price + slDist, _Digits);
    }
+   // BB-only entries: fixed dollar SL — predictable loss cap regardless of
+   // band position or ATR. Overrides band-based SL when BB_SL_Dollar > 0.
+   else if(!isLQS && BB_SL_Dollar > 0.0)
+   {
+      sl     = (dir == ORDER_TYPE_BUY)
+               ? NormalizeDouble(price - BB_SL_Dollar, _Digits)
+               : NormalizeDouble(price + BB_SL_Dollar, _Digits);
+      slDist = BB_SL_Dollar;
+   }
    // BB-only entries: SL at the band that triggered the entry.
    // Use whichever is tighter — band-based or ATR-based.
    // BUY: if price breaks back below BB_Lower the reversal has failed.
@@ -1052,7 +1072,7 @@ void DrawInfoPanel()
       bbWidthStatus = "[OK]";
 
    string info =
-      "╔══ PROJECT BB  v1.6  |  LQS + Bollinger Bands ══╗\n"
+      "╔══ PROJECT BB  v1.9  |  LQS + Bollinger Bands ══╗\n"
       "  Symbol  : " + Symbol()
                      + "   Magic : " + IntegerToString(MagicNumber)        + "\n"
       "  Bid/Ask : " + DoubleToString(bid, _Digits)
