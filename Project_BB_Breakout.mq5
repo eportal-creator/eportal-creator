@@ -1,7 +1,15 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB BREAKOUT  (MT5 v1.9)                        |
+//|                    PROJECT BB BREAKOUT  (MT5 v2.0)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v2.0: BO_SL_Dollar — fixed dollar SL for BO entries               |
+//|  Overrides structure SL (BO_SL_Buffer) for BO entries. Places SL  |
+//|  exactly N dollars from entry — predictable loss cap regardless of |
+//|  swing level distance or ATR. Default 1.50 caps BO loss to ~$1.55 |
+//|  (vs -$2.39 with structure SL + slippage). BE and trail still move |
+//|  SL to better levels after entry — no interference.               |
+//|  Set 0 to revert to structure SL (BO_SL_Buffer behaviour).        |
 //|                                                                  |
 //| v1.9: Revert Fix 1 and Fix 3 — keep only BO_SL_Buffer             |
 //|  Fix 1 (bar range) and Fix 3 (entry distance) both blocked valid  |
@@ -73,7 +81,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB Breakout"
-#property version   "1.900"
+#property version   "2.000"
 #property description "Project BB Breakout | LQS + Breakout Continuation | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -246,6 +254,15 @@ input double BO_SL_Buffer           = 0.60;
 // BO BUY  SL = swing_high - BO_SL_Buffer (below broken resistance, now support).
 // Breakouts routinely retest the broken level before continuing; 0.20 is too tight.
 // Recommended: 0.50–0.80 for XAUUSD M1.
+input double BO_SL_Dollar           = 1.50;
+// Fixed dollar SL distance for BO entries.
+// Overrides the structure SL (BO_SL_Buffer) — places SL exactly N dollars
+// from entry price regardless of swing level position.
+// BO SELL: SL = entry + BO_SL_Dollar. BO BUY: SL = entry - BO_SL_Dollar.
+// Caps the maximum BO loss to a predictable amount and avoids large losses
+// from wide structure SL or slippage (e.g. -$2.39 → capped ~$1.55).
+// Does not interfere with BE or trail — both still move SL to better levels.
+// Set 0 to use structure SL (BO_SL_Buffer) instead.
 input double BB_Width_Min_ATR       = 0.0;
 // Minimum BB width (upper - lower) as a multiple of ATR.
 // Blocks entries when bands are too narrow (squeeze — imminent breakout risk).
@@ -327,7 +344,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("Project BB Breakout v1.9 | Symbol=", Symbol(),
+   Print("Project BB Breakout v2.0 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | HTF_DI=", LQS_HTF_DI_Align,
@@ -890,15 +907,21 @@ void TryLQSTrade()
    // LQS: SL at swept level (if price reclaims it the trade is invalid).
    // BO:  SL at the broken level (if price reclaims it breakout has failed).
    // Falls back to ATR-based if swing level produces invalid distance.
-   if(m1IsTrending && Riding_Structure_SL &&
+   if(isBreakout && BO_SL_Dollar > 0.0)
+   {
+      // Fixed dollar SL for BO entries — predictable loss cap regardless of
+      // swing level distance. BE and trail still improve it after entry.
+      sl     = (dir == ORDER_TYPE_BUY)
+               ? NormalizeDouble(price - BO_SL_Dollar, _Digits)
+               : NormalizeDouble(price + BO_SL_Dollar, _Digits);
+      slDist = BO_SL_Dollar;
+   }
+   else if(m1IsTrending && Riding_Structure_SL &&
       g_LQS_SwingHigh > 0.0 && g_LQS_SwingLow > 0.0 &&
       (isLQS || isBreakout))
    {
       double structSL;
       if(isBreakout)
-         // BO entries: SL at the broken level using wider BO_SL_Buffer —
-         // breakouts frequently retest the broken level before continuing;
-         // a tight buffer causes premature stop-outs on valid retests.
          structSL = (dir == ORDER_TYPE_BUY)
                     ? NormalizeDouble(g_LQS_SwingHigh - BO_SL_Buffer, _Digits)
                     : NormalizeDouble(g_LQS_SwingLow  + BO_SL_Buffer, _Digits);
@@ -1148,7 +1171,7 @@ void DrawInfoPanel()
       bbWidthStatus = "[OK]";
 
    string info =
-      "╔══ PROJECT BB BREAKOUT  v1.9  |  LQS + Bollinger Bands ══╗\n"
+      "╔══ PROJECT BB BREAKOUT  v2.0  |  LQS + Bollinger Bands ══╗\n"
       "  Symbol  : " + Symbol()
                      + "   Magic : " + IntegerToString(MagicNumber)        + "\n"
       "  Bid/Ask : " + DoubleToString(bid, _Digits)
