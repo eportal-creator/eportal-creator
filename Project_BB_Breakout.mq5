@@ -1,25 +1,17 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB BREAKOUT  (MT5 v1.8)                        |
+//|                    PROJECT BB BREAKOUT  (MT5 v1.9)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
 //|                                                                  |
-//| v1.8: BO_Max_Entry_Dist_ATR default raised 0.5→0.75                |
-//|  0.5×ATR was too tight at low ATR (e.g. 0.97 → $0.485 threshold). |
-//|  Valid BO entries in clean uptrends were being blocked. 0.75 gives |
-//|  $0.728 room at ATR=0.97 while still blocking the $1.69-extended   |
-//|  losing trade at ATR=2.01 (threshold $1.508 < $1.69).             |
+//| v1.9: Revert Fix 1 and Fix 3 — keep only BO_SL_Buffer             |
+//|  Fix 1 (bar range) and Fix 3 (entry distance) both blocked valid  |
+//|  high-momentum BO entries (+$4.31 BO BUY at ATR=1.11). BO entries |
+//|  are spike-driven by design — filtering on spike characteristics  |
+//|  contradicts the strategy premise. BO_SL_Buffer (0.60) retained   |
+//|  as the sole BO-specific improvement: wider buffer at the broken  |
+//|  level survives normal retests without blocking genuine entries.  |
 //|                                                                  |
-//| v1.7: Three BO entry quality fixes                                 |
-//|  Fix 1: Bar range check on BO bar — reuses LQS_Bar_Range_Max_ATR.|
-//|    A single breakout candle with range > N×ATR is an exhaustion   |
-//|    spike; entering after it risks chasing a snap-back.            |
-//|  Fix 2: BO_SL_Buffer — separate, wider SL buffer for BO entries.  |
-//|    Breakouts routinely retest the broken level; 0.20 was too      |
-//|    tight. Default 0.60 survives normal retests.                   |
-//|  Fix 3: BO_Max_Entry_Dist_ATR — skip if entry is already too far  |
-//|    from the broken level. A large spike bar leaves entry extended; |
-//|    also blocks entries where price has already reversed past the   |
-//|    level before the EA can open the position.                     |
+//| v1.7–v1.8: (reverted — see above)                                 |
 //|                                                                  |
 //| v1.6: BO_Max_Run_Bars — block BO after extended candle run        |
 //|  BO SELL blocked if N+ consecutive red bars already printed.    |
@@ -81,7 +73,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB Breakout"
-#property version   "1.800"
+#property version   "1.900"
 #property description "Project BB Breakout | LQS + Breakout Continuation | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -254,14 +246,6 @@ input double BO_SL_Buffer           = 0.60;
 // BO BUY  SL = swing_high - BO_SL_Buffer (below broken resistance, now support).
 // Breakouts routinely retest the broken level before continuing; 0.20 is too tight.
 // Recommended: 0.50–0.80 for XAUUSD M1.
-input double BO_Max_Entry_Dist_ATR  = 0.75;
-// Block BO if entry price has already moved more than N×ATR past the broken level.
-// A large breakout bar can push entry far from the swing level — the move is already
-// extended and prone to snap-back before the EA even opens the position.
-// BO SELL: entry (bid) must be within N×ATR below swing_low.
-// BO BUY:  entry (ask) must be within N×ATR above swing_high.
-// Set 0 to disable. Recommended: 0.5 (=$1.00 at ATR=$2.00).
-// Enable for mean reversion (default). Disable only for breakout/trend setups.
 input double BB_Width_Min_ATR       = 0.0;
 // Minimum BB width (upper - lower) as a multiple of ATR.
 // Blocks entries when bands are too narrow (squeeze — imminent breakout risk).
@@ -343,7 +327,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("Project BB Breakout v1.8 | Symbol=", Symbol(),
+   Print("Project BB Breakout v1.9 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | HTF_DI=", LQS_HTF_DI_Align,
@@ -759,23 +743,6 @@ void TryLQSTrade()
    if(isSell) { dir = ORDER_TYPE_SELL; price = SymbolInfoDouble(Symbol(), SYMBOL_BID); }
    else       { dir = ORDER_TYPE_BUY;  price = SymbolInfoDouble(Symbol(), SYMBOL_ASK); }
 
-   // ── Breakout pre-entry filters ────────────────────────────────
-   if(isBreakout)
-   {
-      // Fix 3: block if entry is already too far from the broken level.
-      // A large breakout bar can push price far below/above the swing level before
-      // the next bar opens — the move is extended and a snap-back is likely.
-      // Also blocks re-entries where price has already reversed back past the level.
-      if(BO_Max_Entry_Dist_ATR > 0.0)
-      {
-         double distFromLevel = (dir == ORDER_TYPE_SELL)
-                                ? (g_LQS_SwingLow  - price)   // +ve = below swing (good)
-                                : (price - g_LQS_SwingHigh);  // +ve = above swing (good)
-         if(distFromLevel < 0.0 || distFromLevel > g_ATR * BO_Max_Entry_Dist_ATR) return;
-      }
-
-   }
-
    // ── LQS-only filters ─────────────────────────────────────────
    if(isLQS)
    {
@@ -859,15 +826,6 @@ void TryLQSTrade()
          else break;
       }
       if(runCount >= BO_Max_Run_Bars) return;
-   }
-
-   // Fix 1: block BO if the breakout bar itself is a large exhaustion spike.
-   // Reuses LQS_Bar_Range_Max_ATR — same threshold, same intent.
-   // A single candle with range > N×ATR is a news/momentum spike, not a
-   // genuine breakout bar; entering after it risks chasing exhaustion.
-   if(isBreakout && LQS_Bar_Range_Max_ATR > 0.0)
-   {
-      if((h1 - l1) > g_ATR * LQS_Bar_Range_Max_ATR) return;
    }
 
    if(g_BB_Upper > 0.0 && g_BB_Lower > 0.0)
@@ -1190,7 +1148,7 @@ void DrawInfoPanel()
       bbWidthStatus = "[OK]";
 
    string info =
-      "╔══ PROJECT BB BREAKOUT  v1.8  |  LQS + Bollinger Bands ══╗\n"
+      "╔══ PROJECT BB BREAKOUT  v1.9  |  LQS + Bollinger Bands ══╗\n"
       "  Symbol  : " + Symbol()
                      + "   Magic : " + IntegerToString(MagicNumber)        + "\n"
       "  Bid/Ask : " + DoubleToString(bid, _Digits)
