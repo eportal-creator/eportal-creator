@@ -1,7 +1,13 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB BREAKOUT  (MT5 v1.7)                        |
+//|                    PROJECT BB BREAKOUT  (MT5 v1.8)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v1.8: BO_Max_Entry_Dist_ATR default raised 0.5→0.75                |
+//|  0.5×ATR was too tight at low ATR (e.g. 0.97 → $0.485 threshold). |
+//|  Valid BO entries in clean uptrends were being blocked. 0.75 gives |
+//|  $0.728 room at ATR=0.97 while still blocking the $1.69-extended   |
+//|  losing trade at ATR=2.01 (threshold $1.508 < $1.69).             |
 //|                                                                  |
 //| v1.7: Three BO entry quality fixes                                 |
 //|  Fix 1: Bar range check on BO bar — reuses LQS_Bar_Range_Max_ATR.|
@@ -75,7 +81,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB Breakout"
-#property version   "1.700"
+#property version   "1.800"
 #property description "Project BB Breakout | LQS + Breakout Continuation | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -248,7 +254,7 @@ input double BO_SL_Buffer           = 0.60;
 // BO BUY  SL = swing_high - BO_SL_Buffer (below broken resistance, now support).
 // Breakouts routinely retest the broken level before continuing; 0.20 is too tight.
 // Recommended: 0.50–0.80 for XAUUSD M1.
-input double BO_Max_Entry_Dist_ATR  = 0.5;
+input double BO_Max_Entry_Dist_ATR  = 0.75;
 // Block BO if entry price has already moved more than N×ATR past the broken level.
 // A large breakout bar can push entry far from the swing level — the move is already
 // extended and prone to snap-back before the EA even opens the position.
@@ -337,7 +343,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("Project BB Breakout v1.7 | Symbol=", Symbol(),
+   Print("Project BB Breakout v1.8 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | HTF_DI=", LQS_HTF_DI_Align,
@@ -1184,7 +1190,7 @@ void DrawInfoPanel()
       bbWidthStatus = "[OK]";
 
    string info =
-      "╔══ PROJECT BB BREAKOUT  v1.7  |  LQS + Bollinger Bands ══╗\n"
+      "╔══ PROJECT BB BREAKOUT  v1.8  |  LQS + Bollinger Bands ══╗\n"
       "  Symbol  : " + Symbol()
                      + "   Magic : " + IntegerToString(MagicNumber)        + "\n"
       "  Bid/Ask : " + DoubleToString(bid, _Digits)
