@@ -27,6 +27,11 @@ void OnStart()
       return;
    }
 
+   //--- RSI handle for M1 RSI(14) lookups
+   int rsiHandle = iRSI(Symbol(), PERIOD_M1, 14, PRICE_CLOSE);
+   if(rsiHandle == INVALID_HANDLE)
+      Print("WARNING: RSI handle failed — RSI_at_Entry will be 0.");
+
    //--- First pass: index all ENTRY deals by position ID
    ulong    ep_posID[];
    ulong    ep_ticket[];
@@ -34,6 +39,7 @@ void OnStart()
    datetime ep_time[];
    int      ep_type[];
    double   ep_volume[];
+   double   ep_rsi[];
    int      epCount = 0;
 
    for(int i = 0; i < total; i++)
@@ -48,6 +54,7 @@ void OnStart()
       ArrayResize(ep_time,    epCount + 1);
       ArrayResize(ep_type,    epCount + 1);
       ArrayResize(ep_volume,  epCount + 1);
+      ArrayResize(ep_rsi,     epCount + 1);
 
       ep_posID  [epCount] = (ulong)HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
       ep_ticket [epCount] = ticket;
@@ -55,6 +62,18 @@ void OnStart()
       ep_time   [epCount] = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
       ep_type   [epCount] = (int)HistoryDealGetInteger(ticket, DEAL_TYPE);
       ep_volume [epCount] = HistoryDealGetDouble (ticket, DEAL_VOLUME);
+
+      //--- Look up RSI value at the entry bar
+      double   rsiVal  = 0.0;
+      datetime entryT  = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+      int      barShift = iBarShift(Symbol(), PERIOD_M1, entryT, false);
+      if(rsiHandle != INVALID_HANDLE && barShift >= 0)
+      {
+         double rsiBuf[]; ArraySetAsSeries(rsiBuf, true);
+         if(CopyBuffer(rsiHandle, 0, barShift, 1, rsiBuf) == 1)
+            rsiVal = rsiBuf[0];
+      }
+      ep_rsi[epCount] = rsiVal;
       epCount++;
    }
 
@@ -72,6 +91,7 @@ void OnStart()
       "Symbol", "Type", "Volume",
       "OpenPrice", "ClosePrice",
       "Profit", "Commission", "Swap", "NetProfit",
+      "RSI_at_Entry",
       "Magic", "Comment", "PositionID"
    );
 
@@ -100,6 +120,7 @@ void OnStart()
       double   openPrice  = 0.0;
       datetime openTime   = 0;
       string   typeStr    = "?";
+      double   rsiEntry   = 0.0;
 
       for(int j = 0; j < epCount; j++)
       {
@@ -108,6 +129,7 @@ void OnStart()
             openPrice = ep_price[j];
             openTime  = ep_time[j];
             typeStr   = (ep_type[j] == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+            rsiEntry  = ep_rsi[j];
             break;
          }
       }
@@ -130,6 +152,7 @@ void OnStart()
          DoubleToString(commission, 2),
          DoubleToString(swap,       2),
          DoubleToString(netProfit,  2),
+         DoubleToString(rsiEntry,   1),
          magic,
          comment,
          posID
@@ -141,6 +164,7 @@ void OnStart()
    FileWrite(fh, "", "", "", "", "", "", "", "TOTAL", "", "", "", DoubleToString(totalNet, 2), "", "", "");
 
    FileClose(fh);
+   if(rsiHandle != INVALID_HANDLE) IndicatorRelease(rsiHandle);
 
    string path = TerminalInfoString(TERMINAL_DATA_PATH) + "\\MQL5\\Files\\" + FileName;
    Print("Done. ", written, " trades exported.");
