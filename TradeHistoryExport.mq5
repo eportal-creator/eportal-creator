@@ -27,10 +27,14 @@ void OnStart()
       return;
    }
 
-   //--- RSI handle for M1 RSI(14) lookups
+   //--- Indicator handles for M1 RSI(14) and ADX(14) lookups
    int rsiHandle = iRSI(Symbol(), PERIOD_M1, 14, PRICE_CLOSE);
    if(rsiHandle == INVALID_HANDLE)
       Print("WARNING: RSI handle failed — RSI_at_Entry will be 0.");
+
+   int adxHandle = iADX(Symbol(), PERIOD_M1, 14);
+   if(adxHandle == INVALID_HANDLE)
+      Print("WARNING: ADX handle failed — ADX_at_Entry will be 0.");
 
    //--- First pass: index all ENTRY deals by position ID
    ulong    ep_posID[];
@@ -40,6 +44,8 @@ void OnStart()
    int      ep_type[];
    double   ep_volume[];
    double   ep_rsi[];
+   double   ep_adx[];
+   string   ep_comment[];
    int      epCount = 0;
 
    for(int i = 0; i < total; i++)
@@ -55,6 +61,8 @@ void OnStart()
       ArrayResize(ep_type,    epCount + 1);
       ArrayResize(ep_volume,  epCount + 1);
       ArrayResize(ep_rsi,     epCount + 1);
+      ArrayResize(ep_adx,     epCount + 1);
+      ArrayResize(ep_comment, epCount + 1);
 
       ep_posID  [epCount] = (ulong)HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
       ep_ticket [epCount] = ticket;
@@ -62,11 +70,13 @@ void OnStart()
       ep_time   [epCount] = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
       ep_type   [epCount] = (int)HistoryDealGetInteger(ticket, DEAL_TYPE);
       ep_volume [epCount] = HistoryDealGetDouble (ticket, DEAL_VOLUME);
+      ep_comment[epCount] = HistoryDealGetString (ticket, DEAL_COMMENT);
 
-      //--- Look up RSI value at the entry bar
-      double   rsiVal  = 0.0;
-      datetime entryT  = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+      //--- Look up RSI and ADX values at the entry bar
+      datetime entryT   = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
       int      barShift = iBarShift(Symbol(), PERIOD_M1, entryT, false);
+
+      double rsiVal = 0.0;
       if(rsiHandle != INVALID_HANDLE && barShift >= 0)
       {
          double rsiBuf[]; ArraySetAsSeries(rsiBuf, true);
@@ -74,6 +84,15 @@ void OnStart()
             rsiVal = rsiBuf[0];
       }
       ep_rsi[epCount] = rsiVal;
+
+      double adxVal = 0.0;
+      if(adxHandle != INVALID_HANDLE && barShift >= 0)
+      {
+         double adxBuf[]; ArraySetAsSeries(adxBuf, true);
+         if(CopyBuffer(adxHandle, 0, barShift, 1, adxBuf) == 1)
+            adxVal = adxBuf[0];
+      }
+      ep_adx[epCount] = adxVal;
       epCount++;
    }
 
@@ -91,7 +110,7 @@ void OnStart()
       "Symbol", "Type", "Volume",
       "OpenPrice", "ClosePrice",
       "Profit", "Commission", "Swap", "NetProfit",
-      "RSI_at_Entry",
+      "RSI_at_Entry", "ADX_at_Entry", "Entry_Type",
       "Magic", "Comment", "PositionID"
    );
 
@@ -121,6 +140,8 @@ void OnStart()
       datetime openTime   = 0;
       string   typeStr    = "?";
       double   rsiEntry   = 0.0;
+      double   adxEntry   = 0.0;
+      string   entryType  = "";
 
       for(int j = 0; j < epCount; j++)
       {
@@ -130,6 +151,8 @@ void OnStart()
             openTime  = ep_time[j];
             typeStr   = (ep_type[j] == DEAL_TYPE_BUY) ? "BUY" : "SELL";
             rsiEntry  = ep_rsi[j];
+            adxEntry  = ep_adx[j];
+            entryType = ep_comment[j];
             break;
          }
       }
@@ -153,6 +176,8 @@ void OnStart()
          DoubleToString(swap,       2),
          DoubleToString(netProfit,  2),
          DoubleToString(rsiEntry,   1),
+         DoubleToString(adxEntry,   1),
+         entryType,
          magic,
          comment,
          posID
@@ -161,10 +186,11 @@ void OnStart()
    }
 
    //--- Summary row
-   FileWrite(fh, "", "", "", "", "", "", "", "TOTAL", "", "", "", DoubleToString(totalNet, 2), "", "", "");
+   FileWrite(fh, "", "", "", "", "", "", "", "TOTAL", "", "", "", DoubleToString(totalNet, 2), "", "", "", "", "", "");
 
    FileClose(fh);
    if(rsiHandle != INVALID_HANDLE) IndicatorRelease(rsiHandle);
+   if(adxHandle != INVALID_HANDLE) IndicatorRelease(adxHandle);
 
    string path = TerminalInfoString(TERMINAL_DATA_PATH) + "\\MQL5\\Files\\" + FileName;
    Print("Done. ", written, " trades exported.");
