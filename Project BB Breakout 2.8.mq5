@@ -1117,72 +1117,101 @@ void TryLQSTrade()
    string entryType = isBreakout ? "BO" : (isLQS ? "BB+LQS" : "BB");
    string comment   = entryType + (dir == ORDER_TYPE_BUY ? " BUY" : " SELL");
    SendSignalAlert(dir, price, sl, tp, slDist, tpDist, h1, l1, c1);
-   bool ok = (dir == ORDER_TYPE_BUY)
-             ? trade.Buy (LotSize, Symbol(), price, sl, tp, comment)
-             : trade.Sell(LotSize, Symbol(), price, sl, tp, comment);
+   bool ok;
 
-   if(ok)
+   if(isBreakout)
    {
-      LastEntry = TimeCurrent();
+      // BO: market order — needs immediate execution to catch momentum
+      ok = (dir == ORDER_TYPE_BUY)
+           ? trade.Buy (LotSize, Symbol(), price, sl, tp, comment)
+           : trade.Sell(LotSize, Symbol(), price, sl, tp, comment);
 
-      // Correct SL/TP for slippage: fill price may differ from signal price.
-      // Fixed-dollar SL (BO, BB) is reanchored to fill so slippage cannot
-      // shrink the intended buffer. TP is always corrected to fill price.
-      // Structure SL (LQS swing level) is intentionally left at its level.
-      double fillPrice = trade.ResultPrice();
-      if(fillPrice > 0.0)
+      if(ok)
       {
-         double realSL = sl;
-         double realTP = tp;
-         if(slIsFixedDollar)
-            realSL = (dir == ORDER_TYPE_BUY)
-                     ? NormalizeDouble(fillPrice - slDist, _Digits)
-                     : NormalizeDouble(fillPrice + slDist, _Digits);
-         if(tpDist > 0.0)
-            realTP = (dir == ORDER_TYPE_BUY)
-                     ? NormalizeDouble(fillPrice + tpDist, _Digits)
-                     : NormalizeDouble(fillPrice - tpDist, _Digits);
-         ulong ticket = trade.ResultOrder();
-         if(ticket > 0 && (realSL != sl || realTP != tp))
-         {
-            if(trade.PositionModify(ticket, realSL, realTP))
-            {
-               string slMsg = (realSL != sl)
-                              ? " SL " + DoubleToString(sl,_Digits) + "->" + DoubleToString(realSL,_Digits)
-                              : "";
-               string tpMsg = (realTP != tp)
-                              ? " TP " + DoubleToString(tp,_Digits) + "->" + DoubleToString(realTP,_Digits)
-                              : "";
-               Print("Fill correction | fill=", DoubleToString(fillPrice,_Digits),
-                     " slip=", DoubleToString(fillPrice - price, _Digits),
-                     slMsg, tpMsg);
-            }
-            else
-               Print("Fill correction FAIL: ", trade.ResultRetcodeDescription());
-         }
-      }
+         LastEntry = TimeCurrent();
 
-      Print("OPEN ", entryType, " ", (dir == ORDER_TYPE_BUY ? "BUY " : "SELL"),
-            " | swingH=",  DoubleToString(g_LQS_SwingHigh, _Digits),
-            " | swingL=",  DoubleToString(g_LQS_SwingLow,  _Digits),
-            " | bar1H=",   DoubleToString(h1, _Digits),
-            " | bar1L=",   DoubleToString(l1, _Digits),
-            " | bar1C=",   DoubleToString(c1, _Digits),
-            " | BB_U=",    DoubleToString(g_BB_Upper,  _Digits),
-            " | BB_M=",    DoubleToString(g_BB_Middle, _Digits),
-            " | BB_L=",    DoubleToString(g_BB_Lower,  _Digits),
-            " | SL=",      DoubleToString(slMult, 1), "xATR",
-                           (m1IsRanging ? " [RANGING]" : " [TREND]"),
-            " | SLdist=",  DoubleToString(slDist, 2),
-            " | TP=",      DoubleToString(tpDist, 2),
-            " | ATR=",     DoubleToString(g_ATR,  2),
-            " | M1+DI=",   DoubleToString(g_M1PlusDI,  1),
-            " | M1-DI=",   DoubleToString(g_M1MinusDI, 1),
-            " | SGT=",     TimeToString(GetSGT(), TIME_MINUTES));
+         // Correct SL/TP for slippage on BO market fills
+         double fillPrice = trade.ResultPrice();
+         if(fillPrice > 0.0)
+         {
+            double realSL = sl;
+            double realTP = tp;
+            if(slIsFixedDollar)
+               realSL = (dir == ORDER_TYPE_BUY)
+                        ? NormalizeDouble(fillPrice - slDist, _Digits)
+                        : NormalizeDouble(fillPrice + slDist, _Digits);
+            if(tpDist > 0.0)
+               realTP = (dir == ORDER_TYPE_BUY)
+                        ? NormalizeDouble(fillPrice + tpDist, _Digits)
+                        : NormalizeDouble(fillPrice - tpDist, _Digits);
+            ulong ticket = trade.ResultOrder();
+            if(ticket > 0 && (realSL != sl || realTP != tp))
+            {
+               if(trade.PositionModify(ticket, realSL, realTP))
+               {
+                  string slMsg = (realSL != sl)
+                                 ? " SL " + DoubleToString(sl,_Digits) + "->" + DoubleToString(realSL,_Digits)
+                                 : "";
+                  string tpMsg = (realTP != tp)
+                                 ? " TP " + DoubleToString(tp,_Digits) + "->" + DoubleToString(realTP,_Digits)
+                                 : "";
+                  Print("Fill correction | fill=", DoubleToString(fillPrice,_Digits),
+                        " slip=", DoubleToString(fillPrice - price, _Digits),
+                        slMsg, tpMsg);
+               }
+               else
+                  Print("Fill correction FAIL: ", trade.ResultRetcodeDescription());
+            }
+         }
+         Print("OPEN BO ", (dir == ORDER_TYPE_BUY ? "BUY " : "SELL"),
+               " | price=", DoubleToString(price, _Digits),
+               " | SL=",    DoubleToString(sl, _Digits),
+               " | SGT=",   TimeToString(GetSGT(), TIME_MINUTES));
+      }
+      else
+         Print("BO Order FAIL [", trade.ResultRetcode(), "] ",
+               trade.ResultRetcodeDescription());
    }
    else
-      Print("LQS Order FAIL [", trade.ResultRetcode(), "] ",
-            trade.ResultRetcodeDescription());
+   {
+      // BB/LQS: limit order at band level — enters at the rejection point,
+      // not after the bounce. Expires in 2 minutes if unfilled.
+      double limitPrice = (dir == ORDER_TYPE_BUY) ? g_BB_Lower : g_BB_Upper;
+      datetime expiry   = TimeCurrent() + 120;
+
+      // Recalculate SL/TP anchored to limit price, not market price.
+      // Fixed-dollar SL must be measured from where we actually fill.
+      // Absolute SL levels (band, swing) are unchanged.
+      double limitSL = sl;
+      double limitTP = tp;
+      if(slIsFixedDollar)
+         limitSL = (dir == ORDER_TYPE_BUY)
+                   ? NormalizeDouble(limitPrice - slDist, _Digits)
+                   : NormalizeDouble(limitPrice + slDist, _Digits);
+      if(tpDist > 0.0)
+         limitTP = (dir == ORDER_TYPE_BUY)
+                   ? NormalizeDouble(limitPrice + tpDist, _Digits)
+                   : NormalizeDouble(limitPrice - tpDist, _Digits);
+
+      ok = (dir == ORDER_TYPE_BUY)
+           ? trade.BuyLimit (LotSize, limitPrice, Symbol(), limitSL, limitTP,
+                             ORDER_TIME_SPECIFIED, expiry, comment)
+           : trade.SellLimit(LotSize, limitPrice, Symbol(), limitSL, limitTP,
+                             ORDER_TIME_SPECIFIED, expiry, comment);
+
+      if(ok)
+      {
+         LastEntry = TimeCurrent();
+         Print("LIMIT ", entryType, " ", (dir == ORDER_TYPE_BUY ? "BUY " : "SELL"),
+               " @ ", DoubleToString(limitPrice, _Digits),
+               " | SL=",  DoubleToString(limitSL, _Digits),
+               " | exp=2min",
+               " | SGT=", TimeToString(GetSGT(), TIME_MINUTES));
+      }
+      else
+         Print("Limit Order FAIL [", trade.ResultRetcode(), "] ",
+               trade.ResultRetcodeDescription());
+   }
 }
 
 //===================================================================
