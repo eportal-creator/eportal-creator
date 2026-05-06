@@ -1,7 +1,20 @@
 //+------------------------------------------------------------------+
-//|                    PROJECT BB BREAKOUT  (MT5 v2.8)                        |
+//|                    PROJECT BB BREAKOUT  (MT5 v2.9)                        |
 //|  LQS Liquidity Sweep + Bollinger Band Confluence EA             |
 //|  Based on LQS Zone Scalper v1.191                               |
+//|                                                                  |
+//| v2.9: Bug fixes                                                  |
+//|  Fix 1: DI Spread Filter now skips BO entries. Previously the   |
+//|    previous bar's DI spread (spreadBuy2/spreadSell2) could block |
+//|    valid BO entries right at DI crossovers — the prior bar is    |
+//|    always counter-directional just before a breakout fires.      |
+//|  Fix 2: Pending orders cancelled before placing any new order.  |
+//|    A pending BB/LQS limit + new BO market could create two open  |
+//|    positions simultaneously. All pending orders for this         |
+//|    symbol/magic are now cancelled first.                         |
+//|  Fix 3: Guard added for limitPrice = 0. If BB bands return 0    |
+//|    mid-session (CopyBuffer failure), limit orders are skipped    |
+//|    instead of sending a price=0 order to the broker.            |
 //|                                                                  |
 //| v2.8: BO exhaustion filter improvements                           |
 //|  Fix 1: BO_Max_Run_Bars now counts all directional bars in the   |
@@ -141,7 +154,7 @@
 //|  close-back, body-direction, explosion-bar block.               |
 //+------------------------------------------------------------------+
 #property copyright "Project BB Breakout"
-#property version   "2.800"
+#property version   "2.900"
 #property description "Project BB Breakout | LQS + Breakout Continuation | XAUUSD M1"
 
 #include <Trade\Trade.mqh>
@@ -437,7 +450,7 @@ int OnInit()
                     : (LQS_TP_ATR_Factor > 0.0
                        ? DoubleToString(LQS_TP_ATR_Factor,2)+"xATR [dynamic]"
                        : "$"+DoubleToString(LQS_TP_Fixed,2)+" [fixed]");
-   Print("Project BB Breakout v2.8 | Symbol=", Symbol(),
+   Print("Project BB Breakout v2.9 | Symbol=", Symbol(),
          " | Magic=", MagicNumber,
          " | Exit=", exitMode,
          " | HTF_DI=", LQS_HTF_DI_Align,
@@ -547,6 +560,19 @@ void RefreshLQSLevels()
    if(CopyLow (Symbol(), PERIOD_M1, 2, LQS_Lookback, lows)  < LQS_Lookback) return;
    g_LQS_SwingHigh = highs[ArrayMaximum(highs)];
    g_LQS_SwingLow  = lows [ArrayMinimum(lows)];
+}
+
+void CancelPendingOrders()
+{
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket == 0) continue;
+      if(OrderGetString(ORDER_SYMBOL) != Symbol()) continue;
+      if((int)OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
+      if(!trade.OrderDelete(ticket))
+         Print("Cancel pending FAIL: ", trade.ResultRetcodeDescription());
+   }
 }
 
 int CountMyPositions()
@@ -973,7 +999,9 @@ void TryLQSTrade()
       if(isBuy  && c1 > g_BB_Middle) return;
    }
 
-   if(LQS_DI_Spread_Filter > 0.0)
+   // BO entries skip this filter: previous bar is always counter-directional
+   // (DI just crossed), so spreadBuy2/spreadSell2 would block valid breakouts.
+   if(LQS_DI_Spread_Filter > 0.0 && !isBreakout)
    {
       double spreadSell1 = g_M1PlusDI  - g_M1MinusDI;
       double spreadBuy1  = g_M1MinusDI - g_M1PlusDI;
@@ -1100,6 +1128,7 @@ void TryLQSTrade()
    string entryType = isBreakout ? "BO" : (isLQS ? "BB+LQS" : "BB");
    string comment   = entryType + (dir == ORDER_TYPE_BUY ? " BUY" : " SELL");
    SendSignalAlert(dir, price, sl, tp, slDist, tpDist, h1, l1, c1);
+   CancelPendingOrders();
    bool ok;
 
    if(isBreakout)
@@ -1160,6 +1189,7 @@ void TryLQSTrade()
       // BB/LQS: limit order at band level — enters at the rejection point,
       // not after the bounce. Expires in 2 minutes if unfilled.
       double limitPrice = (dir == ORDER_TYPE_BUY) ? g_BB_Lower : g_BB_Upper;
+      if(limitPrice <= 0.0) { Print("LIMIT skip — band price is 0"); return; }
       datetime expiry   = TimeCurrent() + 120;
 
       // Recalculate SL/TP anchored to limit price, not market price.
@@ -1332,7 +1362,7 @@ void DrawInfoPanel()
       bbWidthStatus = "[OK]";
 
    string info =
-      "╔══ PROJECT BB BREAKOUT  v2.8  |  LQS + Bollinger Bands ══╗\n"
+      "╔══ PROJECT BB BREAKOUT  v2.9  |  LQS + Bollinger Bands ══╗\n"
       "  Symbol  : " + Symbol()
                      + "   Magic : " + IntegerToString(MagicNumber)        + "\n"
       "  Bid/Ask : " + DoubleToString(bid, _Digits)
