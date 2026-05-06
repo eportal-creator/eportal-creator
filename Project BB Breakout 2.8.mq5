@@ -337,7 +337,7 @@ input double BO_Trail_Step          = 0.30;
 // Dollar gap between trailing SL and current BID/ASK for BO entries.
 // 0.30: follows momentum $0.30 behind — wide enough to survive minor
 // pullbacks but exits quickly if the breakout reverses.
-input bool   BO_RSI_Filter          = true;
+input bool   BO_RSI_Filter          = false;
 // Block BO entries when RSI(14) is at an extreme — price already exhausted.
 // BO SELL blocked when RSI < BO_RSI_Oversold  (sustained downward exhaustion).
 // BO BUY  blocked when RSI > BO_RSI_Overbought (sustained upward exhaustion).
@@ -951,23 +951,6 @@ void TryLQSTrade()
       if(runCount >= BO_Max_Run_Bars - 1) return;  // block if N-1 of N bars directional
    }
 
-   // Block BO when RSI is at an extreme — market already exhausted in that direction.
-   // Lag is intentional: RSI < 32 confirms sustained downward move, not a spike.
-   if(BO_RSI_Filter && isBreakout)
-   {
-      if(isSell && g_RSI < BO_RSI_Oversold)
-      {
-         Print("BO SKIP | RSI exhausted: RSI=", DoubleToString(g_RSI, 2),
-               " < oversold threshold=", DoubleToString(BO_RSI_Oversold, 1));
-         return;
-      }
-      if(isBuy && g_RSI > BO_RSI_Overbought)
-      {
-         Print("BO SKIP | RSI exhausted: RSI=", DoubleToString(g_RSI, 2),
-               " > overbought threshold=", DoubleToString(BO_RSI_Overbought, 1));
-         return;
-      }
-   }
 
    if(g_BB_Upper > 0.0 && g_BB_Lower > 0.0)
    {
