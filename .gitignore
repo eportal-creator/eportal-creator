@@ -1,0 +1,4 @@
+# Generated output files
+bb_bo_trade_visual.png
+*.pyc
+__pycache__/
