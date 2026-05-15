@@ -530,7 +530,7 @@ string BBMode()
 void SendSignalAlert(ENUM_ORDER_TYPE dir, double entryPrice,
                      double sl, double tp,
                      double slDist, double tpDist,
-                     double h1, double l1, double c1)
+                     double h1, double l1, double c1, string entryType)
 {
    if(!Enable_Notify) return;
    string side    = (dir == ORDER_TYPE_BUY) ? "BUY" : "SELL";
@@ -544,12 +544,16 @@ void SendSignalAlert(ENUM_ORDER_TYPE dir, double entryPrice,
                       : "SwH=" + DoubleToString(g_LQS_SwingHigh, 2)
                         + " h1=" + DoubleToString(h1, 2)
                         + " c1=" + DoubleToString(c1, 2);
+   bool isBO      = (entryType == "BO");
    string tpStr   = (tpDist > 0.0)
                     ? DoubleToString(tp, 2) + "  ($" + DoubleToString(tpDist, 2) + ")"
-                    : "Trail $" + DoubleToString(LQS_Trail_Start, 2)
-                      + " step $" + DoubleToString(LQS_Trail_Step, 2);
+                    : isBO
+                      ? "Trail $" + DoubleToString(BO_Trail_Start, 2)
+                        + " step $" + DoubleToString(BO_Trail_Step, 2)
+                      : "Trail $" + DoubleToString(LQS_Trail_Start, 2)
+                        + " step $" + DoubleToString(LQS_Trail_Step, 2);
    string msg =
-      "[BB+LQS] " + side + " SIGNAL  XAUUSD\n"
+      "[" + entryType + "] " + side + " SIGNAL  XAUUSD\n"
       + "Entry : " + DoubleToString(entryPrice, 2) + "\n"
       + "SL    : " + DoubleToString(sl, 2)
       + "  ($" + DoubleToString(slDist, 2) + ")\n"
@@ -955,7 +959,7 @@ void TryLQSTrade()
 
    string entryType = isBreakout ? "BO" : (isLQS ? "BB+LQS" : "BB");
    string comment   = entryType + (dir == ORDER_TYPE_BUY ? " BUY" : " SELL");
-   SendSignalAlert(dir, price, sl, tp, slDist, tpDist, h1, l1, c1);
+   SendSignalAlert(dir, price, sl, tp, slDist, tpDist, h1, l1, c1, entryType);
    CancelPendingOrders();
    bool ok;
 
