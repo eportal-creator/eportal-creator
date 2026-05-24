@@ -393,7 +393,9 @@ datetime GetSGT() { return (datetime)((long)TimeGMT() + 8 * 3600); }
 bool InSession()
 {
    int h = HourOfTime(GetSGT());
-   return (h >= SG_Start && h < SG_End);
+   if(SG_End > SG_Start)
+      return (h >= SG_Start && h < SG_End);
+   return (h >= SG_Start || h < SG_End);  // overnight wrap e.g. 06:00→04:00
 }
 
 int BrokerGMTOffset() { return (int)((TimeCurrent() - TimeGMT()) / 3600); }
